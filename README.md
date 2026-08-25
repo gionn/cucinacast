@@ -2,6 +2,9 @@
 
 Telegram bot that searches YouTube and casts the top result to a Nest Mini (Chromecast).
 
+Named after "cucina" (Italian for kitchen) — the Nest Mini it talks to lives in the
+kitchen.
+
 ## Setup
 
 ```
