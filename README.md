@@ -46,6 +46,23 @@ NEST_DEVICE_NAME="Cucinino" ./venv/bin/python cast_test.py "some song name"
 ./venv/bin/python bot.py
 ```
 
+## Run as a systemd service
+
+After cloning the repo, run:
+
+```
+./setup.sh
+```
+
+This creates the venv, installs dependencies, scaffolds a `.env` (if missing), and
+installs/enables a system-wide `cucinacast.service` unit (requires `sudo`) running as
+the user who cloned the repo. Fill in `.env`, then:
+
+```
+sudo systemctl start cucinacast
+journalctl -u cucinacast -f
+```
+
 ## Bot commands
 
 - `/start` — explains what the bot does and lists the commands below.
