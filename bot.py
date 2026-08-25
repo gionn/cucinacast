@@ -95,10 +95,8 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def post_init(app: Application) -> None:
     await app.bot.set_my_commands(
         [
-            BotCommand("start", "Show what this bot does"),
             BotCommand("play", "Search YouTube and play on the Nest Mini"),
             BotCommand("stop", "Stop playback"),
-            BotCommand("whoami", "Show your Telegram user id"),
         ]
     )
 
