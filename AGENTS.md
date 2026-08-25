@@ -7,17 +7,20 @@ exercising the same casting logic without Telegram.
 ## Commands
 
 ```
-python3 -m venv venv
-./venv/bin/pip install -r requirements.txt
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
 
 # standalone cast test
-NEST_DEVICE_NAME="Cucinino" ./venv/bin/python cast_test.py "some song name"
+NEST_DEVICE_NAME="Cucinino" ./.venv/bin/python cast_test.py "some song name"
 
 # run the bot (reads .env via python-dotenv)
-./venv/bin/python bot.py
+./.venv/bin/python bot.py
 
 # syntax-check after edits (no test suite exists)
-./venv/bin/python -m py_compile bot.py castyt.py cast_test.py
+./.venv/bin/python -m py_compile bot.py castyt.py cast_test.py
+
+# install/refresh as a systemd service (creates .venv, installs deps every run)
+./setup.sh
 ```
 
 Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Optional:

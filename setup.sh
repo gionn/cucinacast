@@ -8,10 +8,10 @@ SERVICE_NAME=cucinacast
 
 cd "$REPO_DIR"
 
-if [ ! -d venv ]; then
-    python3 -m venv venv
+if [ ! -d .venv ]; then
+    python3 -m venv .venv
 fi
-./venv/bin/pip install -q -r requirements.txt
+./.venv/bin/pip install -q -r requirements.txt
 
 if [ ! -f .env ]; then
     cat > .env <<'EOF'
@@ -33,7 +33,7 @@ Wants=network-online.target
 Type=simple
 User=${SERVICE_USER}
 WorkingDirectory=${REPO_DIR}
-ExecStart=${REPO_DIR}/venv/bin/python ${REPO_DIR}/bot.py
+ExecStart=${REPO_DIR}/.venv/bin/python ${REPO_DIR}/bot.py
 Restart=on-failure
 RestartSec=5
 
