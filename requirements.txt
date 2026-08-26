@@ -2,3 +2,5 @@ catt
 yt-dlp
 python-telegram-bot
 python-dotenv
+onvif-zeep-async
+WSDiscovery
