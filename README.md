@@ -60,7 +60,7 @@ the user who cloned the repo. Fill in `.env`, then:
 
 ```
 sudo systemctl start cucinacast
-journalctl -u cucinacast -f
+sudo journalctl -u cucinacast -f
 ```
 
 ## Bot commands
