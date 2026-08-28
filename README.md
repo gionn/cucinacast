@@ -8,8 +8,8 @@ kitchen.
 ## Setup
 
 ```
-python3 -m venv venv
-./venv/bin/pip install -r requirements.txt
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
 ```
 
 Create a `.env` file in the project root (loaded automatically by `bot.py` via
@@ -26,7 +26,7 @@ Environment variables:
 
 - `TELEGRAM_BOT_TOKEN` — required, from @BotFather.
 - `NEST_DEVICE_NAME` — Chromecast friendly name to cast to (e.g. `Cucinino`, found via
-  `./venv/bin/catt scan`). If unset, `catt`'s configured default device is used.
+  `./.venv/bin/catt scan`). If unset, `catt`'s configured default device is used.
 - `OWNER_USER_ID` — required, your Telegram user id (send `/whoami` to the bot to find
   it). Always allowed to use the bot regardless of `ALLOWED_USER_IDS`, and gets a
   Telegram message whenever another user's `/play` or `/stop` is denied (with that
@@ -37,13 +37,30 @@ Environment variables:
 ## Try casting standalone
 
 ```
-NEST_DEVICE_NAME="Cucinino" ./venv/bin/python cast_test.py "some song name"
+NEST_DEVICE_NAME="Cucinino" ./.venv/bin/python cast_test.py "some song name"
 ```
 
 ## Run the bot
 
 ```
-./venv/bin/python bot.py
+./.venv/bin/python bot.py
+```
+
+## Run as a systemd service
+
+After cloning the repo, run:
+
+```
+./setup.sh
+```
+
+This creates the venv, installs dependencies, scaffolds a `.env` (if missing), and
+installs/enables a system-wide `cucinacast.service` unit (requires `sudo`) running as
+the user who cloned the repo. Fill in `.env`, then:
+
+```
+sudo systemctl start cucinacast
+sudo journalctl -u cucinacast -f
 ```
 
 ## Bot commands
