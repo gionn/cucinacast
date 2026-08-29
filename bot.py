@@ -31,6 +31,8 @@ ALLOWED_USER_IDS = {
 }
 OWNER_USER_ID = int(os.environ["OWNER_USER_ID"])
 
+ANNOUNCE_MAX_LENGTH = 200
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
@@ -79,6 +81,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     query = " ".join(context.args) if context.args else None
     if not query:
+        _awaiting_announce_text.discard(update.effective_user.id)
         _awaiting_play_text.add(update.effective_user.id)
         await update.message.reply_text("What do you want to play?")
         return
@@ -105,6 +108,7 @@ async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     text = " ".join(context.args) if context.args else None
     if not text:
+        _awaiting_play_text.discard(update.effective_user.id)
         _awaiting_announce_text.add(update.effective_user.id)
         await update.message.reply_text("What should I announce?")
         return
@@ -113,6 +117,16 @@ async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _do_announce(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    text = text.strip()
+    if not text:
+        await update.message.reply_text("Nothing to announce.")
+        return
+    if len(text) > ANNOUNCE_MAX_LENGTH:
+        await update.message.reply_text(
+            f"That's too long to announce ({len(text)} chars, max {ANNOUNCE_MAX_LENGTH})."
+        )
+        return
+
     try:
         url = await asyncio.to_thread(synthesize_and_serve, text, phrases.tts_lang())
         await asyncio.to_thread(player.announce, url)
