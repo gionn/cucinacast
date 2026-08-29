@@ -131,7 +131,11 @@ Mini and confirm audio actually plays.
   play HTTP(S) URLs, not local file paths.
   - The audio file is a single fixed path (`tts.DEFAULT_PATH`), overwritten per
     announcement — no per-announcement filenames or cleanup, since motion events
-    are already debounced and only one announcement is ever in flight.
+    are already debounced and only one announcement is ever in flight. The
+    user-triggered `/announce` command isn't debounced, so back-to-back
+    announcements (or one racing a motion event) can overwrite the file before
+    the Nest Mini finishes fetching the prior one — accepted as a known
+    limitation rather than adding per-announcement filenames/a queue.
   - `_AnnounceHandler` only serves that one fixed path (404s everything else) —
     deliberately not `SimpleHTTPRequestHandler` over the whole temp directory,
     which would expose unrelated temp files on a shared machine.

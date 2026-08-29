@@ -166,6 +166,10 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _deny(update, context)
         return
 
+    user_id = update.effective_user.id
+    _awaiting_play_text.discard(user_id)
+    _awaiting_announce_text.discard(user_id)
+
     try:
         await asyncio.to_thread(player.stop)
     except Exception as exc:
