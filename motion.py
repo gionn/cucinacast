@@ -21,18 +21,19 @@ DISCOVERY_TIMEOUT_SECONDS = 5
 MOTION_TOPIC = "VideoSource/MotionAlarm"
 OBJECT_CLASS_TOPIC = "ObjectDetection/Object"
 DEBOUNCE_SECONDS = 30
+CLASSIFICATION_WAIT_SECONDS = 2
 SUBSCRIPTION_INTERVAL = datetime.timedelta(minutes=10)
 PULL_TIMEOUT = datetime.timedelta(seconds=10)
 PULL_MESSAGE_LIMIT = 10
 
 _CLASS_KEYWORDS = {
-    "human": "a person",
-    "person": "a person",
-    "face": "a person",
-    "animal": "an animal",
-    "pet": "an animal",
-    "vehicle": "a vehicle",
-    "car": "a vehicle",
+    "human": "person",
+    "person": "person",
+    "face": "person",
+    "animal": "animal",
+    "pet": "animal",
+    "vehicle": "vehicle",
+    "car": "vehicle",
 }
 
 
@@ -41,13 +42,14 @@ def motion_detection_enabled():
 
 
 def describe_object(class_types):
-    """Map a vendor-specific ONVIF ClassTypes string (e.g. "Human", "Animal") to
-    a natural-language phrase, falling back to generic wording when absent/unrecognized."""
+    """Map a vendor-specific ONVIF ClassTypes string (e.g. "Human", "Animal") to a
+    language-neutral category ("person"/"animal"/"vehicle"), falling back to
+    "unknown" when absent/unrecognized. Callers localize this into wording."""
     lowered = (class_types or "").lower()
-    for keyword, phrase in _CLASS_KEYWORDS.items():
+    for keyword, category in _CLASS_KEYWORDS.items():
         if keyword in lowered:
-            return phrase
-    return "someone"
+            return category
+    return "unknown"
 
 
 def _on_subscription_lost():
@@ -89,6 +91,22 @@ async def watch_motion(on_motion):
 
     last_announced = 0
     last_object_class = ""
+    pending_tasks = set()
+
+    async def _announce_after_delay():
+        nonlocal last_object_class
+        # Classification events (if the camera supports them) tend to arrive
+        # shortly after the motion event they belong to, not before — wait a
+        # moment so a following one can still be picked up.
+        await asyncio.sleep(CLASSIFICATION_WAIT_SECONDS)
+        description = describe_object(last_object_class)
+        last_object_class = ""
+        logger.info("Motion detected (%s)", description)
+        try:
+            await on_motion(description)
+        except Exception:
+            logger.exception("on_motion callback failed")
+
     logger.info("Subscribed to ONVIF events, watching for motion...")
     try:
         while True:
@@ -117,13 +135,9 @@ async def watch_motion(on_motion):
                     logger.info("Motion detected, debounced")
                     continue
                 last_announced = now
-                description = describe_object(last_object_class)
-                last_object_class = ""
-                logger.info("Motion detected (%s)", description)
-                try:
-                    await on_motion(description)
-                except Exception:
-                    logger.exception("on_motion callback failed")
+                task = asyncio.create_task(_announce_after_delay())
+                pending_tasks.add(task)
+                task.add_done_callback(pending_tasks.discard)
     finally:
         await manager.shutdown()
 

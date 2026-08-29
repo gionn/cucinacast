@@ -14,6 +14,7 @@ from telegram.error import Conflict
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 import motion
+import phrases
 from announce import synthesize_and_serve
 from castyt import player
 
@@ -112,15 +113,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error("Unhandled exception while processing update %r", update, exc_info=context.error)
 
 
-async def _on_motion(description: str) -> None:
-    logger.info("Motion detected: %s", description)
-    text = (
-        "Someone is at the door."
-        if description == "someone"
-        else f"Someone is at the door — I think it's {description}."
-    )
+async def _on_motion(category: str) -> None:
+    logger.info("Motion detected: %s", category)
+    text = phrases.announcement_text(category)
     try:
-        url = await asyncio.to_thread(synthesize_and_serve, text)
+        url = await asyncio.to_thread(synthesize_and_serve, text, phrases.TTS_LANG)
         await asyncio.to_thread(player.announce, url)
     except Exception:
         logger.exception("Failed to announce motion event")

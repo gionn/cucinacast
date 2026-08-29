@@ -16,8 +16,12 @@ NEST_DEVICE_NAME="Cucinino" ./.venv/bin/python cast_test.py "some song name"
 # run the bot (reads .env via python-dotenv)
 ./.venv/bin/python bot.py
 
+# standalone TTS test (writes an MP3, no camera/chromecast needed — useful to
+# isolate whether a problem is in synthesis or in casting/playback)
+./venv/bin/python tts.py "some announcement text"
+
 # syntax-check after edits (no test suite exists)
-./.venv/bin/python -m py_compile bot.py castyt.py cast_test.py motion.py announce.py
+./.venv/bin/python -m py_compile bot.py castyt.py cast_test.py motion.py announce.py tts.py phrases.py
 
 # install/refresh as a systemd service (creates .venv, installs deps every run)
 ./setup.sh
@@ -25,7 +29,7 @@ NEST_DEVICE_NAME="Cucinino" ./.venv/bin/python cast_test.py "some song name"
 
 Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Optional:
 `NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
-`ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`.
+`ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`.
 
 There is no test suite. Verification is manual: run `cast_test.py` or the bot against
 the real Nest Mini and confirm audio actually plays.
@@ -77,19 +81,41 @@ the real Nest Mini and confirm audio actually plays.
     "Human"/"Animal"/"Vehicle") to natural-language phrases via `describe_object`,
     keyword-matched with a generic ("someone") fallback since classification
     support/vocabulary varies by camera.
-  - `on_motion` is awaited directly from the event loop — no extra
-    thread/task plumbing needed since `watch_motion` is already a coroutine.
+  - On some cameras the classification event for an object arrives *after* the
+    motion event it belongs to, not before. A confirmed motion event schedules
+    `_announce_after_delay` (an `asyncio.create_task`, tracked in `pending_tasks`
+    to avoid premature GC) which waits `CLASSIFICATION_WAIT_SECONDS` before
+    reading `last_object_class` and invoking `on_motion` — this lets a
+    same-batch classification event that follows the motion event still be
+    picked up.
+  - `on_motion` is awaited directly from `_announce_after_delay` — no extra
+    thread plumbing needed since `watch_motion` is already a coroutine.
   - `run_forever` wraps `watch_motion` in a retry loop so a transient camera or
     network failure can't crash the bot process.
   - `motion_detection_enabled()` gates the whole feature on `ONVIF_USER`/
     `ONVIF_PASS` being set — both are optional at the bot level.
-- `announce.py` — TTS synthesis (via `gTTS`, chosen since the project already
-  requires internet for YouTube) plus a small stdlib `ThreadingHTTPServer` to serve
-  the resulting MP3 over the LAN, since the Chromecast can only play HTTP(S) URLs,
-  not local file paths.
-  - The audio file is a single fixed path, overwritten per announcement — no
-    per-announcement filenames or cleanup, since motion events are already
-    debounced and only one announcement is ever in flight.
+  - `describe_object` returns a language-neutral category
+    ("person"/"animal"/"vehicle"/"unknown"), not wording — localization into an
+    actual sentence is `phrases.py`'s job, keeping `motion.py` free of any
+    TTS/language concern.
+- `phrases.py` — localized wording for doorbell announcements. `TTS_LANG` (env,
+  default `en`) selects the language; `announcement_text(category)` maps a
+  `motion.describe_object` category to a sentence in that language, falling back
+  to English wording for unconfigured `TTS_LANG` values. Kept separate from
+  `bot.py` (wiring only) and from `motion.py`/`tts.py` (language-agnostic) so
+  adding a language/wording is a one-file change.
+- `tts.py` — TTS synthesis only (via `gTTS`, chosen since the project already
+  requires internet for YouTube), no serving/casting dependency. `synthesize(text,
+  lang, path)` saves an MP3 and returns its path. Kept separate from `announce.py`
+  so other features can reuse synthesis without the HTTP-serving concern, and so
+  it can be exercised standalone (`python tts.py "some text"`) to check whether a
+  problem is in the TTS output itself vs. in casting/playback.
+- `announce.py` — imports `tts.synthesize` and serves the resulting MP3 over a
+  small stdlib `ThreadingHTTPServer` on the LAN, since the Chromecast can only
+  play HTTP(S) URLs, not local file paths.
+  - The audio file is a single fixed path (`tts.DEFAULT_PATH`), overwritten per
+    announcement — no per-announcement filenames or cleanup, since motion events
+    are already debounced and only one announcement is ever in flight.
   - `_get_lan_ip()` detects the host's outbound LAN IP (not `localhost`, which the
     Chromecast can't resolve) via a connect-less UDP socket trick; override with
     `ANNOUNCE_HOST` for multi-NIC machines.

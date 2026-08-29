@@ -51,6 +51,10 @@ feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
 - `ANNOUNCE_HOST` — override the LAN IP advertised to the Chromecast for fetching
   announcement audio (auto-detected by default; only needed on multi-NIC
   machines).
+- `TTS_LANG` — language for announcement speech and wording (default `en`; `it` is
+  also supported). Any other `gTTS`-supported language code works for speech, but
+  the announcement wording itself is only translated for `en`/`it` — falls back to
+  English wording for other codes.
 
 ## Try casting standalone
 

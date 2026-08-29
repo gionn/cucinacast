@@ -1,4 +1,4 @@
-"""Synthesize TTS announcements and serve them over HTTP for the Chromecast to fetch."""
+"""Serve synthesized TTS announcements over HTTP for the Chromecast to fetch."""
 import http.server
 import logging
 import os
@@ -7,12 +7,11 @@ import tempfile
 import threading
 from functools import partial
 
-from gtts import gTTS
+from tts import DEFAULT_PATH, synthesize
 
 logger = logging.getLogger(__name__)
 
 ANNOUNCE_PORT = int(os.environ.get("ANNOUNCE_PORT", "8765"))
-_AUDIO_PATH = os.path.join(tempfile.gettempdir(), "cucinacast_announce.mp3")
 
 _server_lock = threading.Lock()
 _server_started = False
@@ -44,6 +43,6 @@ def _ensure_server():
 def synthesize_and_serve(text, lang="en"):
     """Synthesize text to speech, overwrite the shared audio file, ensure the HTTP
     server is running, and return a LAN-reachable URL for the Chromecast to fetch."""
-    gTTS(text=text, lang=lang).save(_AUDIO_PATH)
+    synthesize(text, lang=lang, path=DEFAULT_PATH)
     _ensure_server()
-    return f"http://{_get_lan_ip()}:{ANNOUNCE_PORT}/{os.path.basename(_AUDIO_PATH)}"
+    return f"http://{_get_lan_ip()}:{ANNOUNCE_PORT}/{DEFAULT_PATH.name}"
