@@ -1,4 +1,5 @@
 """Watch an ONVIF camera for motion events, no Telegram/TTS/casting dependency."""
+
 import asyncio
 import datetime
 import logging
@@ -80,13 +81,13 @@ def discover_camera():
 async def watch_motion(on_motion):
     """Subscribe to the camera's events and await on_motion(category) for each
     debounced motion event, where category is "person"/"animal"/"vehicle"/"unknown"."""
-    host, port = (ONVIF_HOST, ONVIF_PORT) if ONVIF_HOST else await asyncio.to_thread(discover_camera)
+    host, port = (
+        (ONVIF_HOST, ONVIF_PORT) if ONVIF_HOST else await asyncio.to_thread(discover_camera)
+    )
     camera = ONVIFCamera(host, port, ONVIF_USER, ONVIF_PASS)
     await camera.update_xaddrs()
 
-    manager = await camera.create_pullpoint_manager(
-        SUBSCRIPTION_INTERVAL, _on_subscription_lost
-    )
+    manager = await camera.create_pullpoint_manager(SUBSCRIPTION_INTERVAL, _on_subscription_lost)
     service = manager.get_service()
 
     last_announced = 0

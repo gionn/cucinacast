@@ -1,4 +1,5 @@
 """Localized wording for motion-triggered doorbell announcements."""
+
 import os
 
 TTS_LANG = os.environ.get("TTS_LANG", "en")

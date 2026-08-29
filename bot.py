@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Telegram bot: search YouTube and cast the top result to the Nest Mini."""
+
 import asyncio
 import logging
 import os
@@ -9,14 +10,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from telegram import BotCommand, Update
-from telegram.error import Conflict
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import BotCommand, Update  # noqa: E402
+from telegram.error import Conflict  # noqa: E402
+from telegram.ext import (  # noqa: E402
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
-import motion
-import phrases
-from announce import synthesize_and_serve
-from castyt import player
+import motion  # noqa: E402
+import phrases  # noqa: E402
+from announce import synthesize_and_serve  # noqa: E402
+from castyt import player  # noqa: E402
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL)
@@ -72,7 +79,9 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     query = " ".join(context.args) if context.args else update.message.text
     if not query:
-        await update.message.reply_text("Send a song/video name to play, e.g. /play bohemian rhapsody")
+        await update.message.reply_text(
+            "Send a song/video name to play, e.g. /play bohemian rhapsody"
+        )
         return
 
     await update.message.reply_text(f"Searching for: {query}...")

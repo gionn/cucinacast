@@ -1,4 +1,5 @@
 """Serve synthesized TTS announcements over HTTP for the Chromecast to fetch."""
+
 import http.server
 import logging
 import os

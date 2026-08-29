@@ -1,4 +1,5 @@
 """Search YouTube and cast search results to a Chromecast device via catt, auto-advancing."""
+
 import logging
 import os
 import threading
@@ -89,11 +90,17 @@ class Player:
                         self._play_current_locked(current_time=self._interrupted_at_seconds)
                         return
                     except CastError:
-                        logger.exception("Failed to resume %r after announcement", self.queue[self.index].get("title"))
+                        logger.exception(
+                            "Failed to resume %r after announcement",
+                            self.queue[self.index].get("title"),
+                        )
                         self._reset_cast_device_locked()
                         self.index += 1
                     except Exception:
-                        logger.exception("Failed to resume %r after announcement", self.queue[self.index].get("title"))
+                        logger.exception(
+                            "Failed to resume %r after announcement",
+                            self.queue[self.index].get("title"),
+                        )
                         self.index += 1
                     self._try_play_locked()
                 return
