@@ -218,6 +218,10 @@ async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         title, url = await asyncio.to_thread(player.skip)
+    except RuntimeError as exc:
+        logger.info("Skip failed: %s", exc)
+        await update.message.reply_text(f"Couldn't skip: {exc}")
+        return
     except Exception as exc:
         logger.exception("Failed to skip track")
         await update.message.reply_text(f"Couldn't skip: {exc}")
