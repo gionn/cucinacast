@@ -42,6 +42,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "if you leave out the query, I'll ask for it\n"
         "/announce <text> - speak a custom message on the Nest Mini; "
         "if you leave out the text, I'll ask for it\n"
+        "/nowplaying - show the current track\n"
+        "/skip - skip to the next track\n"
         "/stop - stop playback\n"
         "/whoami - show your Telegram user id\n\n"
         "You can also just send a plain text message instead of /play."
@@ -180,6 +182,54 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Stopped.")
 
 
+async def nowplaying(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        await _deny(update, context)
+        return
+
+    user_id = update.effective_user.id
+    _awaiting_play_text.discard(user_id)
+    _awaiting_announce_text.discard(user_id)
+
+    try:
+        result = await asyncio.to_thread(player.now_playing)
+    except Exception as exc:
+        logger.exception("Failed to get now-playing status")
+        await update.message.reply_text(f"Couldn't get status: {exc}")
+        return
+
+    if result is None:
+        await update.message.reply_text("Nothing is playing.")
+        return
+
+    title, url, state = result
+    suffix = f" ({state})" if state else ""
+    await update.message.reply_text(f"Now playing{suffix}: {title}\n{url}")
+
+
+async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        await _deny(update, context)
+        return
+
+    user_id = update.effective_user.id
+    _awaiting_play_text.discard(user_id)
+    _awaiting_announce_text.discard(user_id)
+
+    try:
+        title, url = await asyncio.to_thread(player.skip)
+    except RuntimeError as exc:
+        logger.info("Skip failed: %s", exc)
+        await update.message.reply_text(f"Couldn't skip: {exc}")
+        return
+    except Exception as exc:
+        logger.exception("Failed to skip track")
+        await update.message.reply_text(f"Couldn't skip: {exc}")
+        return
+
+    await update.message.reply_text(f"Now playing: {title}\n{url}")
+
+
 conflict_detected = False
 
 
@@ -215,6 +265,8 @@ async def post_init(app: Application) -> None:
         [
             BotCommand("play", "Search YouTube and play"),
             BotCommand("announce", "Speak a custom message"),
+            BotCommand("nowplaying", "Show the current track"),
+            BotCommand("skip", "Skip to the next track"),
             BotCommand("stop", "Stop playback"),
         ]
     )
@@ -247,6 +299,8 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("play", play))
     app.add_handler(CommandHandler("announce", announce))
+    app.add_handler(CommandHandler("nowplaying", nowplaying))
+    app.add_handler(CommandHandler("skip", skip))
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _route_text))

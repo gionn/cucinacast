@@ -218,6 +218,31 @@ class Player:
             raise RuntimeError(f"No playable YouTube results for {query!r}")
         return played["title"], played["url"]
 
+    def skip(self):
+        with self._lock:
+            if not (0 <= self.index < len(self.queue)):
+                raise RuntimeError("Nothing is playing.")
+            self._announcing = False
+            self.index += 1
+            played = self._try_play_locked()
+        if not played:
+            raise RuntimeError("No more tracks to play.")
+        return played["title"], played["url"]
+
+    def now_playing(self):
+        with self._lock:
+            if not (0 <= self.index < len(self.queue)):
+                return None
+            entry = self.queue[self.index]
+            device = self._device
+        state = None
+        if device is not None:
+            try:
+                state = device.controller.info.get("player_state")
+            except Exception:
+                logger.exception("Failed to read player state")
+        return entry["title"], entry["url"], state
+
     def stop(self):
         with self._lock:
             self.query = None
