@@ -3,12 +3,14 @@
 import asyncio
 import logging
 import os
+import sys
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from telegram import BotCommand, Update
+from telegram.error import Conflict
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from castyt import player
@@ -95,6 +97,19 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Stopped.")
 
 
+conflict_detected = False
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global conflict_detected
+    if isinstance(context.error, Conflict):
+        logger.error("Another bot instance is already polling with this token, exiting.")
+        conflict_detected = True
+        context.application.stop_running()
+        return
+    logger.error("Unhandled exception while processing update %r", update, exc_info=context.error)
+
+
 async def post_init(app: Application) -> None:
     await app.bot.set_my_commands(
         [
@@ -111,7 +126,10 @@ def main() -> None:
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
+    app.add_error_handler(error_handler)
     app.run_polling()
+    if conflict_detected:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
