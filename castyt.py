@@ -60,14 +60,15 @@ def search_youtube(query, count=SEARCH_RESULT_COUNT, exclude_ids=frozenset()):
         storage.store_pool(query, entries)
     candidates = [e for e in entries if e["id"] not in exclude_ids]
     candidates.sort(key=lambda e: e.get("view_count") or 0, reverse=True)
-    random.shuffle(candidates)
+    top = candidates[:count]
+    random.shuffle(top)
     return [
         {
             "id": e["id"],
             "title": e["title"],
             "url": f"https://www.youtube.com/watch?v={e['id']}",
         }
-        for e in candidates
+        for e in top
     ]
 
 
@@ -204,7 +205,9 @@ class Player:
         self.queue.extend(entries)
 
     def play_search(self, query):
-        entries = search_youtube(query, exclude_ids=storage.recent_ids(query))
+        entries = search_youtube(
+            query, count=SEARCH_POOL_SIZE, exclude_ids=storage.recent_ids(query)
+        )
         with self._lock:
             self.query = query
             self.queue = entries
