@@ -7,7 +7,7 @@ CucinaCast: a Telegram bot that searches YouTube and casts the result to a Nest 
 
 ```
 python3 -m venv .venv
-./.venv/bin/pip install -r requirements.txt
+./.venv/bin/pip install -r requirements-dev.txt
 
 # run the bot (reads .env via python-dotenv)
 ./.venv/bin/python bot.py
@@ -16,33 +16,54 @@ python3 -m venv .venv
 # isolate whether a problem is in synthesis or in casting/playback)
 ./.venv/bin/python tts.py "some announcement text"
 
-# syntax-check after edits (no test suite exists)
-./.venv/bin/python -m py_compile bot.py castyt.py motion.py announce.py tts.py phrases.py
+# syntax-check after edits
+./.venv/bin/python -m py_compile bot.py castyt.py motion.py announce.py tts.py phrases.py storage.py
+
+# run the test suite (unit tests for search ranking/caching and play-history
+# storage logic; everything else is still verified manually, see below)
+./.venv/bin/python -m pytest
 
 # install/refresh as a systemd service (creates .venv, installs deps every run)
 ./setup.sh
 ```
+
+`requirements-dev.txt` pulls in `requirements.txt` plus `pytest`; `setup.sh` and the
+systemd service only need `requirements.txt`.
 
 Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Optional:
 `NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
 `ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`, `LOG_LEVEL`,
 `HTTPX_LOG_LEVEL`.
 
-There is no test suite. Verification is manual: run the bot against the real Nest
-Mini and confirm audio actually plays.
+`pytest` covers the search-ranking/caching logic in `castyt.py` and the storage
+logic in `storage.py` (`tests/`), with the actual `yt-dlp`/sqlite calls
+mocked/isolated. Everything that touches the real Chromecast, camera, or Telegram
+API still has no automated coverage — verify those manually by running the bot
+against the real Nest Mini and confirming audio actually plays.
 
 ## Architecture
 
 - `castyt.py` — all casting/search logic, no Telegram dependency.
-  - `search_youtube(query, count)` uses `yt-dlp`'s `ytsearchN:` pseudo-URL (no API key).
+  - `search_youtube(query, count, exclude_ids)` fetches a pool of up to
+    `SEARCH_POOL_SIZE` results via `yt-dlp`'s `ytsearchN:` pseudo-URL (no API key;
+    `_fetch_live`), drops any id in `exclude_ids`, ranks the rest by `view_count`
+    descending, keeps the top `count`, and shuffles just that slice — so playback
+    favors popular tracks without always playing them in the same order. The raw
+    pool is cached in `storage.py` per query (`storage.cached_pool`/`store_pool`)
+    so a repeat search skips the `yt-dlp` network call as long as the cache is
+    fresh and has enough rows for the current request.
   - `Player` is a singleton (`player = Player()`) that holds one persistent
     `catt.api.CattDevice` connection and a search-result queue. It registers itself as
     a `pychromecast` media status listener (`new_media_status`) to detect when a track
     finishes (`player_state == "IDLE"` and `idle_reason == "FINISHED"`) and
     auto-advances to the next queued result. When the queue runs out it re-searches the
-    same query for more results (`_grow_queue_locked`), deduping by video id, so
-    playback continues indefinitely until `/stop`. Unplayable entries (private/removed
-    videos) are skipped automatically (`_try_play_locked`).
+    same query for more results (`_grow_queue_locked`), excluding both video ids
+    already in the queue and ids from `storage.recent_ids` (recently played for that
+    query), so playback continues indefinitely until `/stop` without repeating
+    recent picks. Unplayable entries (private/removed videos) are skipped
+    automatically (`_try_play_locked`), which also records a successful play via
+    `storage.record_play` — announcement resumes (in `new_media_status`) don't call
+    `_try_play_locked`, so they aren't recorded as a new play.
   - All device/queue mutation goes through `self._lock` since the pychromecast status
     callback fires on its own socket thread, concurrently with bot-triggered calls.
   - Casting a URL requires building a `catt.stream_info.StreamInfo` with
@@ -129,6 +150,20 @@ Mini and confirm audio actually plays.
     Chromecast can't resolve) via a connect-less UDP socket trick; override with
     `ANNOUNCE_HOST` for multi-NIC machines or networks without external
     connectivity (where the detection trick itself would fail).
+- `storage.py` — sqlite persistence (`cucinacast.db`, gitignored) for both
+  play history and the search-result cache, no Telegram/casting dependency.
+  - `plays` table backs `record_play`/`recent_ids`: each query keeps only its
+    `HISTORY_LIMIT` most recent plays (older rows for that query are deleted on
+    each `record_play`), so recency-based exclusion needs no unbounded memory or
+    disk growth.
+  - `search_cache` table backs `cached_pool`/`store_pool`: `cached_pool` returns
+    `None` (a cache miss) if the query has fewer rows than the caller's requested
+    `min_count`, or if the cached rows are older than `CACHE_TTL_SECONDS` — either
+    triggers a live re-fetch in `castyt.py`, which then calls `store_pool` to
+    fully replace that query's cached rows.
+  - Each function opens and closes its own short-lived `sqlite3.connect`; no
+    long-held connection or extra locking, since `Player` already serializes its
+    own calls into this module through `self._lock`.
 - `Player.announce(url)` in `castyt.py` interrupts current playback to play an
   arbitrary announcement URL, tracked via an `_announcing` flag on `Player`. The
   `new_media_status` FINISHED callback branches on this flag: after an
