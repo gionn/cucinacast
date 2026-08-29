@@ -256,6 +256,7 @@ async def watch_motion(on_motion):
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
         await manager.shutdown()
+        await camera.close()
 
 
 async def run_forever(on_motion, retry_delay_seconds=30):
