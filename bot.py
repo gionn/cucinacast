@@ -18,7 +18,8 @@ import phrases
 from announce import synthesize_and_serve
 from castyt import player
 
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 HTTPX_LOG_LEVEL = os.environ.get("HTTPX_LOG_LEVEL", "WARNING").upper()

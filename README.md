@@ -35,6 +35,7 @@ Bot / casting:
   user's id and name), so you can decide whether to add them to `ALLOWED_USER_IDS`.
 - `ALLOWED_USER_IDS` — optional, comma-separated Telegram user ids allowed to use
   `/play`/`/stop` in addition to the owner. If unset, anyone can use the bot.
+- `LOG_LEVEL` — optional, overall log level for the bot (default `INFO`).
 - `HTTPX_LOG_LEVEL` — optional, log level for the `httpx` library (used internally by
   `python-telegram-bot` for polling). Defaults to `WARNING` to avoid flooding the logs
   with a line per poll request; set to `INFO` or `DEBUG` for verbose HTTP logging.

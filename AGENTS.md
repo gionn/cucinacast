@@ -25,7 +25,8 @@ python3 -m venv .venv
 
 Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Optional:
 `NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
-`ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`.
+`ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`, `LOG_LEVEL`,
+`HTTPX_LOG_LEVEL`.
 
 There is no test suite. Verification is manual: run the bot against the real Nest
 Mini and confirm audio actually plays.
