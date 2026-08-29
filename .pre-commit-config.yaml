@@ -11,3 +11,11 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: ./.venv/bin/python -m pytest
+        language: system
+        files: \.py$
+        pass_filenames: false
