@@ -1,8 +1,7 @@
 ## What this is
 
 CucinaCast: a Telegram bot that searches YouTube and casts the result to a Nest Mini
-(Chromecast) speaker on the local network. `cast_test.py` is a standalone CLI for
-exercising the same casting logic without Telegram.
+(Chromecast) speaker on the local network.
 
 ## Commands
 
@@ -10,24 +9,27 @@ exercising the same casting logic without Telegram.
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 
-# standalone cast test
-NEST_DEVICE_NAME="Cucinino" ./.venv/bin/python cast_test.py "some song name"
-
 # run the bot (reads .env via python-dotenv)
 ./.venv/bin/python bot.py
 
+# standalone TTS test (writes an MP3, no camera/chromecast needed — useful to
+# isolate whether a problem is in synthesis or in casting/playback)
+./.venv/bin/python tts.py "some announcement text"
+
 # syntax-check after edits (no test suite exists)
-./.venv/bin/python -m py_compile bot.py castyt.py cast_test.py
+./.venv/bin/python -m py_compile bot.py castyt.py motion.py announce.py tts.py phrases.py
 
 # install/refresh as a systemd service (creates .venv, installs deps every run)
 ./setup.sh
 ```
 
 Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Optional:
-`NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`.
+`NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
+`ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`, `LOG_LEVEL`,
+`HTTPX_LOG_LEVEL`.
 
-There is no test suite. Verification is manual: run `cast_test.py` or the bot against
-the real Nest Mini and confirm audio actually plays.
+There is no test suite. Verification is manual: run the bot against the real Nest
+Mini and confirm audio actually plays.
 
 ## Architecture
 
@@ -62,3 +64,90 @@ the real Nest Mini and confirm audio actually plays.
     notified of unauthorized attempts; `ALLOWED_USER_IDS` (optional, comma-separated)
     additionally allow-lists other users. If `ALLOWED_USER_IDS` is empty, the bot is
     open to everyone.
+  - `post_init` starts `motion.run_forever(_on_motion)` as a background task via
+    plain `asyncio.create_task`, not `app.create_task` — `post_init` runs before
+    `Application.start()`, when `app.create_task` would warn and not track the
+    task for `stop()` to await. The task is kept in a module-level `_motion_task`
+    and cancelled/awaited from a `post_stop` hook instead, only if
+    `motion.motion_detection_enabled()` is true — bots without a camera
+    configured are unaffected. `_on_motion` skips unclassified
+    ("unknown"-category) motion entirely — generic motion is usually uninteresting
+    (wind, shadows, etc.), so only motion the camera actually classified (person/
+    animal/vehicle) gets announced. Otherwise it looks up the wording via
+    `phrases.announcement_text` and casts it via `announce.synthesize_and_serve` +
+    `player.announce` (both via `asyncio.to_thread`, same pattern as `play`/`stop`).
+- `motion.py` — ONVIF motion-detection logic, no Telegram/TTS/casting dependency
+  (mirrors `castyt.py`'s separation).
+  - `watch_motion(on_motion)` subscribes to the camera's pullpoint events (same
+    `create_pullpoint_manager`/`PullMessages` flow as the retired PoC).
+    `discover_camera()` runs via `asyncio.to_thread` since it's blocking
+    WS-Discovery I/O, same reason as `castyt.py`'s Chromecast discovery.
+  - Classification for an object can arrive after its motion event, not
+    before. A confirmed motion event schedules `_announce_after_delay`
+    (tracked in `pending_tasks`, both to avoid premature GC and to gate
+    classification recording/overlapping evaluations to one at a time), which
+    waits `CLASSIFICATION_WAIT_SECONDS` before reading `last_object_class` and
+    invoking `on_motion`.
+  - The debounce cooldown (`DEBOUNCE_SECONDS`) only starts once a recognized
+    category is resolved, not the moment raw motion fires — otherwise an
+    unclassified event (wind, shadows) would suppress a real one for 30s.
+  - `run_forever` wraps `watch_motion` in a retry loop so a transient camera or
+    network failure can't crash the bot process.
+  - `watch_motion`'s `finally` cancels and awaits any still-pending
+    `_announce_after_delay` task before shutting down the subscription — those
+    tasks are independent children of the loop, not of `watch_motion`, so
+    without this an in-flight one could still fire an announcement after a
+    subscription failure or shutdown has already moved on to a new watcher.
+  - `motion_detection_enabled()` gates the whole feature on `ONVIF_USER`/
+    `ONVIF_PASS` being set — both are optional at the bot level.
+  - `describe_object` returns a language-neutral category
+    ("person"/"animal"/"vehicle"/"unknown"), not wording — localization into an
+    actual sentence is `phrases.py`'s job, keeping `motion.py` free of any
+    TTS/language concern.
+- `phrases.py` — localized wording for doorbell announcements. `TTS_LANG` (env,
+  default `en`) selects the language; `announcement_text(category)` maps a
+  `motion.describe_object` category to a sentence in that language, falling back
+  to English wording for unconfigured `TTS_LANG` values. Kept separate from
+  `bot.py` (wiring only) and from `motion.py`/`tts.py` (language-agnostic) so
+  adding a language/wording is a one-file change.
+- `tts.py` — TTS synthesis only (via `gTTS`, chosen since the project already
+  requires internet for YouTube), no serving/casting dependency. `synthesize(text,
+  lang, path)` saves an MP3 and returns its path. Kept separate from `announce.py`
+  so other features can reuse synthesis without the HTTP-serving concern, and so
+  it can be exercised standalone (`python tts.py "some text"`) to check whether a
+  problem is in the TTS output itself vs. in casting/playback.
+- `announce.py` — imports `tts.synthesize` and serves the resulting MP3 over a
+  small stdlib `ThreadingHTTPServer` on the LAN, since the Chromecast can only
+  play HTTP(S) URLs, not local file paths.
+  - The audio file is a single fixed path (`tts.DEFAULT_PATH`), overwritten per
+    announcement — no per-announcement filenames or cleanup, since motion events
+    are already debounced and only one announcement is ever in flight.
+  - `_AnnounceHandler` only serves that one fixed path (404s everything else) —
+    deliberately not `SimpleHTTPRequestHandler` over the whole temp directory,
+    which would expose unrelated temp files on a shared machine.
+  - `_get_lan_ip()` detects the host's outbound LAN IP (not `localhost`, which the
+    Chromecast can't resolve) via a connect-less UDP socket trick; override with
+    `ANNOUNCE_HOST` for multi-NIC machines or networks without external
+    connectivity (where the detection trick itself would fail).
+- `Player.announce(url)` in `castyt.py` interrupts current playback to play an
+  arbitrary announcement URL, tracked via an `_announcing` flag on `Player`. The
+  `new_media_status` FINISHED callback branches on this flag: after an
+  announcement it resumes the current queue entry near where it was interrupted;
+  otherwise it advances the queue as before. `stop()` also clears `_announcing`
+  so a `/stop` mid-announcement can't leave a stale flag.
+  - Resume position is approximated, not exact: `_play_current_locked` records
+    `_track_started_at = time.monotonic() - (current_time or 0)` whenever it
+    (re)starts a track. `announce()` captures
+    `_interrupted_at_seconds = time.monotonic() - _track_started_at` *before*
+    playing the announcement (not after — the announcement's own duration
+    would otherwise inflate the resumed position by however long it took to
+    speak), and that saved value is passed as `current_time` to
+    `play_media_url` (a native `catt`/pychromecast parameter) on resume. This
+    drifts by a few seconds (network/buffering delay isn't accounted for) —
+    accepted, since exact position would require reading the device's own
+    playback clock.
+  - The resume itself goes through the same failure handling as normal queue
+    advancement: if `_play_current_locked` raises, `new_media_status` falls
+    back to `_try_play_locked` (resetting the cast device on `CastError` and
+    advancing the index first) instead of leaving playback stopped on a
+    transient cast failure.

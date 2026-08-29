@@ -24,6 +24,8 @@ ALLOWED_USER_IDS=
 
 Environment variables:
 
+Bot / casting:
+
 - `TELEGRAM_BOT_TOKEN` — required, from @BotFather.
 - `NEST_DEVICE_NAME` — Chromecast friendly name to cast to (e.g. `Cucinino`, found via
   `./.venv/bin/catt scan`). If unset, `catt`'s configured default device is used.
@@ -33,15 +35,27 @@ Environment variables:
   user's id and name), so you can decide whether to add them to `ALLOWED_USER_IDS`.
 - `ALLOWED_USER_IDS` — optional, comma-separated Telegram user ids allowed to use
   `/play`/`/stop` in addition to the owner. If unset, anyone can use the bot.
+- `LOG_LEVEL` — optional, overall log level for the bot (default `INFO`).
 - `HTTPX_LOG_LEVEL` — optional, log level for the `httpx` library (used internally by
   `python-telegram-bot` for polling). Defaults to `WARNING` to avoid flooding the logs
   with a line per poll request; set to `INFO` or `DEBUG` for verbose HTTP logging.
 
-## Try casting standalone
+Motion detection / doorbell announcements (see below — all optional, and the
+feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
 
-```
-NEST_DEVICE_NAME="Cucinino" ./.venv/bin/python cast_test.py "some song name"
-```
+- `ONVIF_USER` / `ONVIF_PASS` — ONVIF camera credentials. If either is unset,
+  motion detection is disabled and the bot behaves exactly as without a camera.
+- `ONVIF_HOST` / `ONVIF_PORT` — the camera's address. If `ONVIF_HOST` is unset, the
+  camera is auto-discovered via WS-Discovery on the LAN.
+- `ANNOUNCE_PORT` — local port used to serve TTS announcement audio to the
+  Chromecast (default `8765`).
+- `ANNOUNCE_HOST` — override the LAN IP advertised to the Chromecast for fetching
+  announcement audio (auto-detected by default; only needed on multi-NIC
+  machines).
+- `TTS_LANG` — language for announcement speech and wording (default `en`; `it` is
+  also supported). Any other `gTTS`-supported language code works for speech, but
+  the announcement wording itself is only translated for `en`/`it` — falls back to
+  English wording for other codes.
 
 ## Run the bot
 
@@ -81,6 +95,16 @@ sudo journalctl -u cucinacast -f
 
 `/start` and `/whoami` are intentionally left out of the bot's `/`-menu (only `/play`
 and `/stop` show there) but still work when typed.
+
+## Motion detection announcements
+
+If `ONVIF_USER` and `ONVIF_PASS` are set, the bot watches the configured ONVIF
+camera for motion. Generic motion (wind, shadows, etc.) is ignored — an
+announcement only happens when the camera's object classification identifies a
+person, animal, or vehicle, and the announcement names which one it is. Motion
+events are debounced (one announcement per 30s). Once the announcement finishes,
+the interrupted track resumes from approximately where it was interrupted (within
+a few seconds, not frame-exact).
 
 ## Known limitation
 

@@ -13,12 +13,16 @@ from telegram import BotCommand, Update
 from telegram.error import Conflict
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+import motion
+import phrases
+from announce import synthesize_and_serve
 from castyt import player
 
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
-HTTPX_LOG_LEVEL = os.environ.get("HTTPX_LOG_LEVEL", "WARNING")
+HTTPX_LOG_LEVEL = os.environ.get("HTTPX_LOG_LEVEL", "WARNING").upper()
 logging.getLogger("httpx").setLevel(HTTPX_LOG_LEVEL)
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -110,17 +114,56 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error("Unhandled exception while processing update %r", update, exc_info=context.error)
 
 
+async def _on_motion(category: str) -> None:
+    logger.info("Motion detected: %s", category)
+    if category == "unknown":
+        logger.info("Unclassified motion, skipping announcement")
+        return
+    text = phrases.announcement_text(category)
+    try:
+        url = await asyncio.to_thread(synthesize_and_serve, text, phrases.TTS_LANG)
+        await asyncio.to_thread(player.announce, url)
+    except Exception:
+        logger.exception("Failed to announce motion event")
+
+
+_motion_task = None
+
+
 async def post_init(app: Application) -> None:
+    global _motion_task
     await app.bot.set_my_commands(
         [
             BotCommand("play", "Search YouTube and play on the Nest Mini"),
             BotCommand("stop", "Stop playback"),
         ]
     )
+    if motion.motion_detection_enabled():
+        # post_init runs before Application.start(), so app.create_task() would
+        # warn and not track this task for stop() to await; track it ourselves.
+        _motion_task = asyncio.create_task(motion.run_forever(_on_motion))
+        logger.info("Motion detection enabled, watching for camera events")
+    else:
+        logger.info("ONVIF_USER/ONVIF_PASS not set, motion detection disabled")
+
+
+async def post_stop(app: Application) -> None:
+    if _motion_task is not None:
+        _motion_task.cancel()
+        try:
+            await _motion_task
+        except asyncio.CancelledError:
+            pass
 
 
 def main() -> None:
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(post_init)
+        .post_stop(post_stop)
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("play", play))
     app.add_handler(CommandHandler("stop", stop))
