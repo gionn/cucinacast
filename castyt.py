@@ -110,9 +110,12 @@ class Player:
             try:
                 self._play_current_locked()
                 return entry
-            except Exception:
+            except CastError:
                 logger.exception("Skipping unplayable track %r", entry.get("title"))
                 self._reset_cast_device_locked()
+                self.index += 1
+            except Exception:
+                logger.exception("Skipping unplayable track %r", entry.get("title"))
                 self.index += 1
         return None
 
