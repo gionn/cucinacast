@@ -189,8 +189,8 @@ async def post_init(app: Application) -> None:
     global _motion_task
     await app.bot.set_my_commands(
         [
-            BotCommand("play", "Search YouTube and play on the Nest Mini"),
-            BotCommand("announce", "Announce a custom message on the Nest Mini"),
+            BotCommand("play", "Search YouTube and play"),
+            BotCommand("announce", "Speak a custom message"),
             BotCommand("stop", "Stop playback"),
         ]
     )
