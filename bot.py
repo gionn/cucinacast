@@ -16,6 +16,9 @@ from castyt import player
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+HTTPX_LOG_LEVEL = os.environ.get("HTTPX_LOG_LEVEL", "WARNING")
+logging.getLogger("httpx").setLevel(HTTPX_LOG_LEVEL)
+
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_USER_IDS = {
     int(uid) for uid in os.environ.get("ALLOWED_USER_IDS", "").split(",") if uid.strip()
