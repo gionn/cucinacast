@@ -7,18 +7,11 @@ import os
 import sys
 
 from dotenv import load_dotenv
+from telegram import BotCommand, Update
+from telegram.error import Conflict
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 load_dotenv()
-
-from telegram import BotCommand, Update  # noqa: E402
-from telegram.error import Conflict  # noqa: E402
-from telegram.ext import (  # noqa: E402
-    Application,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
 
 import motion  # noqa: E402
 import phrases  # noqa: E402
