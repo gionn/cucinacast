@@ -7,6 +7,11 @@ When a change adds or changes a user-facing feature (a bot command, an env var
 affecting behavior, etc.), update `README.md` to match — it's the user-facing
 doc, kept separate from this file's internal architecture notes.
 
+When working in a new worktree for this repo, create the venv and install
+`requirements-dev.txt` right away (see Commands below) so `pytest` is ready
+before committing — the pre-commit hook runs the test suite, and a missing
+venv fails it.
+
 ## Commands
 
 ```
