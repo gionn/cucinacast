@@ -205,7 +205,7 @@ def test_announce_captures_interrupted_position_and_plays_url(monkeypatch):
     assert player._interrupted_at_seconds == 5.0
     assert player._announcing is True
     fake_device.controller.play_media_url.assert_called_once_with(
-        "http://host/audio.mp3", content_type="audio/mpeg"
+        "http://host/audio.mp3", content_type="audio/mpeg", stream_type="BUFFERED"
     )
 
 
