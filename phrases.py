@@ -2,8 +2,6 @@
 
 import os
 
-TTS_LANG = os.environ.get("TTS_LANG", "en")
-
 _ANNOUNCEMENTS = {
     "en": {
         "person": "Someone is at the door — I think it's a person.",
@@ -20,9 +18,13 @@ _ANNOUNCEMENTS = {
 }
 
 
+def tts_lang():
+    return os.environ.get("TTS_LANG", "en")
+
+
 def announcement_text(category):
     """Return the announcement sentence for a motion category
     ("person"/"animal"/"vehicle"/"unknown") in TTS_LANG, falling back to English
     wording for unconfigured languages."""
-    phrases = _ANNOUNCEMENTS.get(TTS_LANG, _ANNOUNCEMENTS["en"])
+    phrases = _ANNOUNCEMENTS.get(tts_lang(), _ANNOUNCEMENTS["en"])
     return phrases.get(category, phrases["unknown"])

@@ -12,18 +12,22 @@ from yt_dlp import YoutubeDL
 
 logger = logging.getLogger(__name__)
 
-NEST_DEVICE_NAME = os.environ.get("NEST_DEVICE_NAME")
 SEARCH_RESULT_COUNT = 5
 
 DISCOVERY_RETRIES = 3
 DISCOVERY_RETRY_DELAY_SECONDS = 3
 
 
+def _nest_device_name():
+    return os.environ.get("NEST_DEVICE_NAME")
+
+
 def _get_device():
     last_error = None
     for attempt in range(DISCOVERY_RETRIES):
         try:
-            return CattDevice(NEST_DEVICE_NAME) if NEST_DEVICE_NAME else CattDevice()
+            name = _nest_device_name()
+            return CattDevice(name) if name else CattDevice()
         except CastError as exc:
             last_error = exc
             if attempt < DISCOVERY_RETRIES - 1:

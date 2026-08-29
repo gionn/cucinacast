@@ -11,12 +11,12 @@ from telegram import BotCommand, Update
 from telegram.error import Conflict
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-load_dotenv()
+import motion
+import phrases
+from announce import synthesize_and_serve
+from castyt import player
 
-import motion  # noqa: E402
-import phrases  # noqa: E402
-from announce import synthesize_and_serve  # noqa: E402
-from castyt import player  # noqa: E402
+load_dotenv()
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL)
@@ -123,7 +123,7 @@ async def _on_motion(category: str) -> None:
         return
     text = phrases.announcement_text(category)
     try:
-        url = await asyncio.to_thread(synthesize_and_serve, text, phrases.TTS_LANG)
+        url = await asyncio.to_thread(synthesize_and_serve, text, phrases.tts_lang())
         await asyncio.to_thread(player.announce, url)
     except Exception:
         logger.exception("Failed to announce motion event")

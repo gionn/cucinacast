@@ -12,11 +12,6 @@ from wsdiscovery.discovery import ThreadedWSDiscovery as WSDiscovery
 
 logger = logging.getLogger(__name__)
 
-ONVIF_HOST = os.environ.get("ONVIF_HOST")
-ONVIF_PORT = int(os.environ.get("ONVIF_PORT", "80"))
-ONVIF_USER = os.environ.get("ONVIF_USER")
-ONVIF_PASS = os.environ.get("ONVIF_PASS")
-
 DISCOVERY_TIMEOUT_SECONDS = 5
 
 MOTION_TOPIC = "VideoSource/MotionAlarm"
@@ -38,8 +33,24 @@ _CLASS_KEYWORDS = {
 }
 
 
+def _onvif_host():
+    return os.environ.get("ONVIF_HOST")
+
+
+def _onvif_port():
+    return int(os.environ.get("ONVIF_PORT", "80"))
+
+
+def _onvif_user():
+    return os.environ.get("ONVIF_USER")
+
+
+def _onvif_pass():
+    return os.environ.get("ONVIF_PASS")
+
+
 def motion_detection_enabled():
-    return bool(ONVIF_USER and ONVIF_PASS)
+    return bool(_onvif_user() and _onvif_pass())
 
 
 def describe_object(class_types):
@@ -81,10 +92,11 @@ def discover_camera():
 async def watch_motion(on_motion):
     """Subscribe to the camera's events and await on_motion(category) for each
     debounced motion event, where category is "person"/"animal"/"vehicle"/"unknown"."""
+    onvif_host = _onvif_host()
     host, port = (
-        (ONVIF_HOST, ONVIF_PORT) if ONVIF_HOST else await asyncio.to_thread(discover_camera)
+        (onvif_host, _onvif_port()) if onvif_host else await asyncio.to_thread(discover_camera)
     )
-    camera = ONVIFCamera(host, port, ONVIF_USER, ONVIF_PASS)
+    camera = ONVIFCamera(host, port, _onvif_user(), _onvif_pass())
     await camera.update_xaddrs()
 
     manager = await camera.create_pullpoint_manager(SUBSCRIPTION_INTERVAL, _on_subscription_lost)
