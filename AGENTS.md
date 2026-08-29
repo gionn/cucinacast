@@ -1,8 +1,7 @@
 ## What this is
 
 CucinaCast: a Telegram bot that searches YouTube and casts the result to a Nest Mini
-(Chromecast) speaker on the local network. `cast_test.py` is a standalone CLI for
-exercising the same casting logic without Telegram.
+(Chromecast) speaker on the local network.
 
 ## Commands
 
@@ -10,18 +9,15 @@ exercising the same casting logic without Telegram.
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 
-# standalone cast test
-NEST_DEVICE_NAME="Cucinino" ./.venv/bin/python cast_test.py "some song name"
-
 # run the bot (reads .env via python-dotenv)
 ./.venv/bin/python bot.py
 
 # standalone TTS test (writes an MP3, no camera/chromecast needed — useful to
 # isolate whether a problem is in synthesis or in casting/playback)
-./venv/bin/python tts.py "some announcement text"
+./.venv/bin/python tts.py "some announcement text"
 
 # syntax-check after edits (no test suite exists)
-./.venv/bin/python -m py_compile bot.py castyt.py cast_test.py motion.py announce.py tts.py phrases.py
+./.venv/bin/python -m py_compile bot.py castyt.py motion.py announce.py tts.py phrases.py
 
 # install/refresh as a systemd service (creates .venv, installs deps every run)
 ./setup.sh
@@ -31,8 +27,8 @@ Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Option
 `NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
 `ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`.
 
-There is no test suite. Verification is manual: run `cast_test.py` or the bot against
-the real Nest Mini and confirm audio actually plays.
+There is no test suite. Verification is manual: run the bot against the real Nest
+Mini and confirm audio actually plays.
 
 ## Architecture
 

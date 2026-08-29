@@ -56,12 +56,6 @@ feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
   the announcement wording itself is only translated for `en`/`it` — falls back to
   English wording for other codes.
 
-## Try casting standalone
-
-```
-NEST_DEVICE_NAME="Cucinino" ./.venv/bin/python cast_test.py "some song name"
-```
-
 ## Run the bot
 
 ```
