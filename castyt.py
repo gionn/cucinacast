@@ -1,4 +1,5 @@
 """Search YouTube and cast search results to a Chromecast device via catt, auto-advancing."""
+
 import logging
 import os
 import threading
@@ -11,18 +12,22 @@ from yt_dlp import YoutubeDL
 
 logger = logging.getLogger(__name__)
 
-NEST_DEVICE_NAME = os.environ.get("NEST_DEVICE_NAME")
 SEARCH_RESULT_COUNT = 5
 
 DISCOVERY_RETRIES = 3
 DISCOVERY_RETRY_DELAY_SECONDS = 3
 
 
+def _nest_device_name():
+    return os.environ.get("NEST_DEVICE_NAME")
+
+
 def _get_device():
     last_error = None
     for attempt in range(DISCOVERY_RETRIES):
         try:
-            return CattDevice(NEST_DEVICE_NAME) if NEST_DEVICE_NAME else CattDevice()
+            name = _nest_device_name()
+            return CattDevice(name) if name else CattDevice()
         except CastError as exc:
             last_error = exc
             if attempt < DISCOVERY_RETRIES - 1:
@@ -89,11 +94,17 @@ class Player:
                         self._play_current_locked(current_time=self._interrupted_at_seconds)
                         return
                     except CastError:
-                        logger.exception("Failed to resume %r after announcement", self.queue[self.index].get("title"))
+                        logger.exception(
+                            "Failed to resume %r after announcement",
+                            self.queue[self.index].get("title"),
+                        )
                         self._reset_cast_device_locked()
                         self.index += 1
                     except Exception:
-                        logger.exception("Failed to resume %r after announcement", self.queue[self.index].get("title"))
+                        logger.exception(
+                            "Failed to resume %r after announcement",
+                            self.queue[self.index].get("title"),
+                        )
                         self.index += 1
                     self._try_play_locked()
                 return

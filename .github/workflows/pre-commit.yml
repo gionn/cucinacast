@@ -1,0 +1,12 @@
+name: pre-commit
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Alfresco/alfresco-build-tools/.github/actions/pre-commit@d2981070adf1a68c3ddcbf0ebba193467261c9b3 # v18.26.0
