@@ -252,12 +252,16 @@ async def _do_announce_motion(text: str) -> None:
 
 
 async def _send_motion_clip(caption: str) -> None:
+    path = None
     try:
         path = await motion.capture_clip()
         with open(path, "rb") as clip:
             await _bot.send_video(chat_id=OWNER_USER_ID, video=clip, caption=caption)
     except Exception:
         logger.exception("Failed to capture/send motion clip")
+    finally:
+        if path is not None:
+            path.unlink(missing_ok=True)
 
 
 async def _on_motion(category: str) -> None:

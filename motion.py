@@ -17,7 +17,16 @@ logger = logging.getLogger(__name__)
 
 DISCOVERY_TIMEOUT_SECONDS = 5
 CLIP_DURATION_SECONDS = 8
-CLIP_PATH = Path(tempfile.gettempdir()) / "cucinacast_motion_clip.mp4"
+
+_clip_dir = None
+
+
+def _clip_dir_path():
+    global _clip_dir
+    if _clip_dir is None:
+        _clip_dir = tempfile.mkdtemp(prefix="cucinacast_motion_")
+    return _clip_dir
+
 
 MOTION_TOPIC = "VideoSource/MotionAlarm"
 OBJECT_CLASS_TOPIC = "ObjectDetection/Object"
@@ -108,12 +117,13 @@ async def _connect_camera():
     return camera
 
 
-async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS, path=CLIP_PATH):
+async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS):
     """Capture duration_seconds of the camera's live sub-stream (small/fast, good
-    enough for a Telegram notification) to path as an MP4, overwriting any previous
-    clip, and return path. The sub-stream's raw pixel dimensions (720x576) don't
-    match its actual 16:9 content and carry no aspect-ratio tag of their own, so
-    "-aspect 16:9" is passed at mux time to tag it without re-encoding the video."""
+    enough for a Telegram notification) to a freshly named MP4 in a private temp
+    dir, and return its path — the caller is responsible for deleting it once
+    done. The sub-stream's raw pixel dimensions (720x576) don't match its actual
+    16:9 content and carry no aspect-ratio tag of their own, so "-aspect 16:9" is
+    passed at mux time to tag it without re-encoding the video."""
     camera = await _connect_camera()
     media = await camera.create_media_service()
     profiles = await media.GetProfiles()
@@ -126,7 +136,18 @@ async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS, path=CLIP_PATH):
         }
     )
     user, password = _onvif_user(), _onvif_pass()
-    stream_url = uri_resp.Uri.replace("rtsp://", f"rtsp://{user}:{password}@", 1)
+    parsed = urllib.parse.urlsplit(uri_resp.Uri)
+    netloc = (
+        f"{urllib.parse.quote(user, safe='')}:{urllib.parse.quote(password, safe='')}"
+        f"@{parsed.netloc}"
+    )
+    stream_url = urllib.parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
+
+    fd, path = tempfile.mkstemp(dir=_clip_dir_path(), suffix=".mp4")
+    os.close(fd)
+    path = Path(path)
 
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg",
@@ -152,6 +173,7 @@ async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS, path=CLIP_PATH):
     )
     _, stderr = await asyncio.wait_for(proc.communicate(), timeout=duration_seconds + 15)
     if proc.returncode != 0:
+        path.unlink(missing_ok=True)
         raise RuntimeError(
             f"ffmpeg failed capturing motion clip: {stderr.decode(errors='replace')}"
         )
