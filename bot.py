@@ -79,10 +79,13 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _deny(update, context)
         return
 
+    user_id = update.effective_user.id
+    _awaiting_play_text.discard(user_id)
+    _awaiting_announce_text.discard(user_id)
+
     query = " ".join(context.args) if context.args else None
     if not query:
-        _awaiting_announce_text.discard(update.effective_user.id)
-        _awaiting_play_text.add(update.effective_user.id)
+        _awaiting_play_text.add(user_id)
         await update.message.reply_text("What do you want to play?")
         return
 
@@ -106,10 +109,13 @@ async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _deny(update, context)
         return
 
+    user_id = update.effective_user.id
+    _awaiting_play_text.discard(user_id)
+    _awaiting_announce_text.discard(user_id)
+
     text = " ".join(context.args) if context.args else None
     if not text:
-        _awaiting_play_text.discard(update.effective_user.id)
-        _awaiting_announce_text.add(update.effective_user.id)
+        _awaiting_announce_text.add(user_id)
         await update.message.reply_text("What should I announce?")
         return
 
