@@ -64,7 +64,7 @@ def _ensure_server():
         if _server_started:
             return
         port = _announce_port()
-        httpd = http.server.ThreadingHTTPServer(("0.0.0.0", port), _AnnounceHandler)
+        httpd = http.server.ThreadingHTTPServer(("0.0.0.0", port), _AnnounceHandler)  # noqa: S104
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         _server_started = True
         logger.info("Announcement HTTP server listening on port %s", port)
