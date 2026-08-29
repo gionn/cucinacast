@@ -4,8 +4,11 @@ import asyncio
 import datetime
 import logging
 import os
+import shutil
+import tempfile
 import time
 import urllib.parse
+from pathlib import Path
 
 from onvif import ONVIFCamera
 from wsdiscovery.discovery import ThreadedWSDiscovery as WSDiscovery
@@ -13,6 +16,17 @@ from wsdiscovery.discovery import ThreadedWSDiscovery as WSDiscovery
 logger = logging.getLogger(__name__)
 
 DISCOVERY_TIMEOUT_SECONDS = 5
+CLIP_DURATION_SECONDS = 8
+
+_clip_dir = None
+
+
+def _clip_dir_path():
+    global _clip_dir
+    if _clip_dir is None:
+        _clip_dir = tempfile.mkdtemp(prefix="cucinacast_motion_")
+    return _clip_dir
+
 
 MOTION_TOPIC = "VideoSource/MotionAlarm"
 OBJECT_CLASS_TOPIC = "ObjectDetection/Object"
@@ -53,6 +67,10 @@ def motion_detection_enabled():
     return bool(_onvif_user() and _onvif_pass())
 
 
+def ffmpeg_available():
+    return shutil.which("ffmpeg") is not None
+
+
 def describe_object(class_types):
     """Map a vendor-specific ONVIF ClassTypes string (e.g. "Human", "Animal") to a
     language-neutral category ("person"/"animal"/"vehicle"), falling back to
@@ -89,15 +107,94 @@ def discover_camera():
     raise RuntimeError("No ONVIF device found via WS-Discovery; set ONVIF_HOST manually")
 
 
-async def watch_motion(on_motion):
-    """Subscribe to the camera's events and await on_motion(category) for each
-    debounced motion event, where category is "person"/"animal"/"vehicle"/"unknown"."""
+async def _connect_camera():
     onvif_host = _onvif_host()
     host, port = (
         (onvif_host, _onvif_port()) if onvif_host else await asyncio.to_thread(discover_camera)
     )
     camera = ONVIFCamera(host, port, _onvif_user(), _onvif_pass())
     await camera.update_xaddrs()
+    return camera
+
+
+async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS):
+    """Capture duration_seconds of the camera's live sub-stream (small/fast, good
+    enough for a Telegram notification) to a freshly named MP4 in a private temp
+    dir, and return its path — the caller is responsible for deleting it once
+    done. The sub-stream's raw pixel dimensions (720x576) don't match its actual
+    16:9 content and carry no aspect-ratio tag of their own, so "-aspect 16:9" is
+    passed at mux time to tag it without re-encoding the video."""
+    camera = await _connect_camera()
+    media = await camera.create_media_service()
+    profiles = await media.GetProfiles()
+    if not profiles:
+        raise RuntimeError("Camera returned no ONVIF media profiles")
+    profile = next((p for p in profiles if "sub" in p.token.lower()), profiles[-1])
+
+    uri_resp = await media.GetStreamUri(
+        {
+            "StreamSetup": {"Stream": "RTP-Unicast", "Transport": {"Protocol": "RTSP"}},
+            "ProfileToken": profile.token,
+        }
+    )
+    user, password = _onvif_user(), _onvif_pass()
+    parsed = urllib.parse.urlsplit(uri_resp.Uri)
+    netloc = (
+        f"{urllib.parse.quote(user, safe='')}:{urllib.parse.quote(password, safe='')}"
+        f"@{parsed.netloc}"
+    )
+    stream_url = urllib.parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
+
+    fd, path = tempfile.mkstemp(dir=_clip_dir_path(), suffix=".mp4")
+    os.close(fd)
+    path = Path(path)
+
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-rtsp_transport",
+        "tcp",
+        "-i",
+        stream_url,
+        "-t",
+        str(duration_seconds),
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-aspect",
+        "16:9",
+        str(path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=duration_seconds + 15)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        path.unlink(missing_ok=True)
+        raise RuntimeError("ffmpeg timed out capturing motion clip") from None
+
+    if proc.returncode != 0:
+        path.unlink(missing_ok=True)
+        message = stderr.decode(errors="replace")
+        for secret in (password, urllib.parse.quote(password, safe="")):
+            if secret:
+                message = message.replace(secret, "***")
+        raise RuntimeError(f"ffmpeg failed capturing motion clip: {message}")
+    return path
+
+
+async def watch_motion(on_motion):
+    """Subscribe to the camera's events and await on_motion(category) for each
+    debounced motion event, where category is "person"/"animal"/"vehicle"/"unknown"."""
+    camera = await _connect_camera()
 
     manager = await camera.create_pullpoint_manager(SUBSCRIPTION_INTERVAL, _on_subscription_lost)
     service = manager.get_service()

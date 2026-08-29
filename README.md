@@ -147,6 +147,11 @@ the interrupted track resumes from approximately where it was interrupted (withi
 a few seconds, not frame-exact). Announcements are skipped entirely during quiet
 hours (`QUIET_HOURS_START`/`QUIET_HOURS_END`, default 10pm-8am local time).
 
+If `ffmpeg` is available on `PATH`, a short clip of the camera's live sub-stream is
+also sent to the bot owner on Telegram alongside the spoken announcement. If
+`ffmpeg` is missing, this is skipped and only the audio announcement plays — motion
+detection itself is unaffected either way.
+
 ## Known limitation
 
 Live YouTube streams (e.g. 24/7 lofi radio streams) resolve to an HLS manifest whose
