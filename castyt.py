@@ -145,7 +145,9 @@ class Player:
             device = self._ensure_device()
             try:
                 device.controller.prep_app()
-                device.controller.play_media_url(url, content_type=content_type)
+                device.controller.play_media_url(
+                    url, content_type=content_type, stream_type="BUFFERED"
+                )
             except Exception:
                 logger.exception("Failed to play announcement")
                 self._announcing = False
