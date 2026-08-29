@@ -76,6 +76,10 @@ feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
   also supported). Any other `gTTS`-supported language code works for speech, but
   the announcement wording itself is only translated for `en`/`it` — falls back to
   English wording for other codes.
+- `QUIET_HOURS_START` / `QUIET_HOURS_END` — local-time hours (0-23) defining a window
+  in which motion-triggered announcements are suppressed (default `22`/`8`, i.e.
+  10pm-8am). Only affects automatic doorbell announcements from motion detection;
+  the manual `/announce` command always works.
 
 ## Run the bot
 
@@ -140,7 +144,8 @@ announcement only happens when the camera's object classification identifies a
 person, animal, or vehicle, and the announcement names which one it is. Motion
 events are debounced (one announcement per 30s). Once the announcement finishes,
 the interrupted track resumes from approximately where it was interrupted (within
-a few seconds, not frame-exact).
+a few seconds, not frame-exact). Announcements are skipped entirely during quiet
+hours (`QUIET_HOURS_START`/`QUIET_HOURS_END`, default 10pm-8am local time).
 
 ## Known limitation
 

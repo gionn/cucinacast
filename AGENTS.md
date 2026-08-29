@@ -112,7 +112,9 @@ against the real Nest Mini and confirming audio actually plays.
     configured are unaffected. `_on_motion` skips unclassified
     ("unknown"-category) motion entirely — generic motion is usually uninteresting
     (wind, shadows, etc.), so only motion the camera actually classified (person/
-    animal/vehicle) gets announced. Otherwise it looks up the wording via
+    animal/vehicle) gets announced. It also skips announcing during quiet hours
+    (`phrases.in_quiet_hours()`) — this check only gates the automatic motion path,
+    not the manual `/announce` command. Otherwise it looks up the wording via
     `phrases.announcement_text` and casts it via `announce.synthesize_and_serve` +
     `player.announce` (both via `asyncio.to_thread`, same pattern as `play`/`stop`).
 - `motion.py` — ONVIF motion-detection logic, no Telegram/TTS/casting dependency
@@ -148,7 +150,10 @@ against the real Nest Mini and confirming audio actually plays.
   `motion.describe_object` category to a sentence in that language, falling back
   to English wording for unconfigured `TTS_LANG` values. Kept separate from
   `bot.py` (wiring only) and from `motion.py`/`tts.py` (language-agnostic) so
-  adding a language/wording is a one-file change.
+  adding a language/wording is a one-file change. `in_quiet_hours(now=None)` checks
+  the current local hour against `QUIET_HOURS_START`/`QUIET_HOURS_END` (default
+  `22`/`8`), handling the overnight wraparound; `bot.py`'s `_on_motion` uses it to
+  suppress motion-triggered announcements at night.
 - `tts.py` — TTS synthesis only (via `gTTS`, chosen since the project already
   requires internet for YouTube), no serving/casting dependency. `synthesize(text,
   lang, path)` saves an MP3 and returns its path. Kept separate from `announce.py`
