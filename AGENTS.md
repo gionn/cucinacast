@@ -127,7 +127,17 @@ Mini and confirm audio actually plays.
 - `Player.announce(url)` in `castyt.py` interrupts current playback to play an
   arbitrary announcement URL, tracked via an `_announcing` flag on `Player`. The
   `new_media_status` FINISHED callback branches on this flag: after an
-  announcement it resumes the current queue entry from the start (no seek/resume-
-  position tracking — accepted simplification); otherwise it advances the queue as
-  before. `stop()` also clears `_announcing` so a `/stop` mid-announcement can't
-  leave a stale flag.
+  announcement it resumes the current queue entry near where it was interrupted;
+  otherwise it advances the queue as before. `stop()` also clears `_announcing`
+  so a `/stop` mid-announcement can't leave a stale flag.
+  - Resume position is approximated, not exact: `_play_current_locked` records
+    `_track_started_at = time.monotonic() - (current_time or 0)` whenever it
+    (re)starts a track. `announce()` captures
+    `_interrupted_at_seconds = time.monotonic() - _track_started_at` *before*
+    playing the announcement (not after — the announcement's own duration
+    would otherwise inflate the resumed position by however long it took to
+    speak), and that saved value is passed as `current_time` to
+    `play_media_url` (a native `catt`/pychromecast parameter) on resume. This
+    drifts by a few seconds (network/buffering delay isn't accounted for) —
+    accepted, since exact position would require reading the device's own
+    playback clock.

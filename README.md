@@ -103,8 +103,8 @@ camera for motion. Generic motion (wind, shadows, etc.) is ignored — an
 announcement only happens when the camera's object classification identifies a
 person, animal, or vehicle, and the announcement names which one it is. Motion
 events are debounced (one announcement per 30s). Once the announcement finishes,
-the interrupted track resumes — from the start, not the exact position it was
-interrupted at.
+the interrupted track resumes from approximately where it was interrupted (within
+a few seconds, not frame-exact).
 
 ## Known limitation
 
