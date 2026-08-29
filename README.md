@@ -104,11 +104,12 @@ and `/stop` show there) but still work when typed.
 ## Motion detection announcements
 
 If `ONVIF_USER` and `ONVIF_PASS` are set, the bot watches the configured ONVIF
-camera for motion. On motion, it interrupts whatever is playing (or the idle Nest
-Mini) to announce "Someone is at the door", naming a person/animal/vehicle instead
-when the camera's object classification says so. Motion events are debounced (one
-announcement per 30s). Once the announcement finishes, the interrupted track
-resumes — from the start, not the exact position it was interrupted at.
+camera for motion. Generic motion (wind, shadows, etc.) is ignored — an
+announcement only happens when the camera's object classification identifies a
+person, animal, or vehicle, and the announcement names which one it is. Motion
+events are debounced (one announcement per 30s). Once the announcement finishes,
+the interrupted track resumes — from the start, not the exact position it was
+interrupted at.
 
 ## Known limitation
 

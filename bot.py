@@ -115,6 +115,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def _on_motion(category: str) -> None:
     logger.info("Motion detected: %s", category)
+    if category == "unknown":
+        logger.info("Unclassified motion, skipping announcement")
+        return
     text = phrases.announcement_text(category)
     try:
         url = await asyncio.to_thread(synthesize_and_serve, text, phrases.TTS_LANG)
