@@ -44,14 +44,16 @@ against the real Nest Mini and confirming audio actually plays.
 ## Architecture
 
 - `castyt.py` — all casting/search logic, no Telegram dependency.
-  - `search_youtube(query, count, exclude_ids)` fetches a pool of up to
-    `SEARCH_POOL_SIZE` results via `yt-dlp`'s `ytsearchN:` pseudo-URL (no API key;
-    `_fetch_live`), drops any id in `exclude_ids`, ranks the rest by `view_count`
-    descending, keeps the top `count`, and shuffles just that slice — so playback
-    favors popular tracks without always playing them in the same order. The raw
-    pool is cached in `storage.py` per query (`storage.cached_pool`/`store_pool`)
-    so a repeat search skips the `yt-dlp` network call as long as the cache is
-    fresh and has enough rows for the current request.
+  - `search_youtube(query, count, exclude_ids)` fetches a pool of at least
+    `max(count, SEARCH_POOL_SIZE)` results via `yt-dlp`'s `ytsearchN:` pseudo-URL
+    (no API key; `_fetch_live`), drops any id in `exclude_ids`, ranks the rest by
+    `view_count` descending, keeps the top `count`, and shuffles just that slice —
+    so playback favors popular tracks without always playing them in the same
+    order. The raw pool is cached in `storage.py` per query
+    (`storage.cached_pool`/`store_pool`) so a repeat search skips the `yt-dlp`
+    network call as long as the cache is fresh and has at least `count` rows —
+    checked against `count`, not the larger fetch size, so a query with few
+    total results still benefits from caching.
   - `Player` is a singleton (`player = Player()`) that holds one persistent
     `catt.api.CattDevice` connection and a search-result queue. It registers itself as
     a `pychromecast` media status listener (`new_media_status`) to detect when a track

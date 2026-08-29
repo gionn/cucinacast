@@ -45,6 +45,23 @@ def test_search_youtube_uses_cache_on_second_call(monkeypatch):
     assert calls == ["query"]
 
 
+def test_search_youtube_uses_cache_for_sparse_query(monkeypatch):
+    """A query with fewer results than SEARCH_POOL_SIZE should still hit cache
+    on repeat calls, as long as it has enough rows for the requested count."""
+    calls = []
+
+    def fake_fetch(query, fetch_count):
+        calls.append(query)
+        return _fake_entries()  # fewer than SEARCH_POOL_SIZE
+
+    monkeypatch.setattr(castyt, "_fetch_live", fake_fetch)
+
+    castyt.search_youtube("query", count=2)
+    castyt.search_youtube("query", count=2)
+
+    assert calls == ["query"]
+
+
 def test_search_youtube_returns_urls(monkeypatch):
     monkeypatch.setattr(castyt, "_fetch_live", lambda query, fetch_count: _fake_entries())
 

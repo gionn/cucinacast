@@ -24,6 +24,17 @@ def test_record_play_prunes_beyond_history_limit(monkeypatch):
     assert storage.recent_ids("daft punk") == {"id2", "id3", "id4"}
 
 
+def test_record_play_prunes_even_when_same_id_replayed(monkeypatch):
+    monkeypatch.setattr(storage, "HISTORY_LIMIT", 3)
+    for _ in range(10):
+        storage.record_play("daft punk", "same-id")
+    with storage._connect() as conn:
+        row_count = conn.execute(
+            "SELECT COUNT(*) FROM plays WHERE query = ?", ("daft punk",)
+        ).fetchone()[0]
+    assert row_count <= 3
+
+
 def test_cached_pool_miss_when_absent():
     assert storage.cached_pool("daft punk", min_count=5) is None
 

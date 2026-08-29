@@ -54,7 +54,7 @@ def _fetch_live(query, fetch_count):
 
 def search_youtube(query, count=SEARCH_RESULT_COUNT, exclude_ids=frozenset()):
     fetch_count = max(count, SEARCH_POOL_SIZE)
-    entries = storage.cached_pool(query, fetch_count)
+    entries = storage.cached_pool(query, count)
     if entries is None:
         entries = _fetch_live(query, fetch_count)
         storage.store_pool(query, entries)

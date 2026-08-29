@@ -30,8 +30,8 @@ def record_play(query, video_id):
             (query, video_id, time.time()),
         )
         conn.execute(
-            "DELETE FROM plays WHERE query = ? AND video_id NOT IN ("
-            "SELECT video_id FROM plays WHERE query = ? ORDER BY played_at DESC LIMIT ?"
+            "DELETE FROM plays WHERE query = ? AND rowid NOT IN ("
+            "SELECT rowid FROM plays WHERE query = ? ORDER BY played_at DESC LIMIT ?"
             ")",
             (query, query, HISTORY_LIMIT),
         )
@@ -49,7 +49,8 @@ def recent_ids(query):
 def cached_pool(query, min_count):
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT video_id, title, view_count, fetched_at FROM search_cache WHERE query = ?",
+            "SELECT video_id, title, view_count, fetched_at FROM search_cache "
+            "WHERE query = ? ORDER BY rowid",
             (query,),
         ).fetchall()
     if len(rows) < min_count:
