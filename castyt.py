@@ -166,6 +166,7 @@ class Player:
             self.query = query
             self.queue = entries
             self.index = 0
+            self._announcing = False  # a fresh /play supersedes any in-flight announcement
             played = self._try_play_locked()
         if not played:
             raise RuntimeError(f"No playable YouTube results for {query!r}")

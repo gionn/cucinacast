@@ -76,21 +76,18 @@ Mini and confirm audio actually plays.
 - `motion.py` — ONVIF motion-detection logic, no Telegram/TTS/casting dependency
   (mirrors `castyt.py`'s separation).
   - `watch_motion(on_motion)` subscribes to the camera's pullpoint events (same
-    `create_pullpoint_manager`/`PullMessages` flow as the retired PoC) and
-    debounces motion (`DEBOUNCE_SECONDS`).
-  - On some cameras the classification event for an object arrives *after* the
-    motion event it belongs to, not before. A confirmed motion event schedules
-    `_announce_after_delay` (an `asyncio.create_task`, tracked in `pending_tasks`
-    to avoid premature GC) which waits `CLASSIFICATION_WAIT_SECONDS` before
-    reading `last_object_class` and invoking `on_motion` — this lets a
-    same-batch classification event that follows the motion event still be
-    picked up. Classification events are only recorded into `last_object_class`
-    while that window is open (`time.monotonic() - last_announced <
-    CLASSIFICATION_WAIT_SECONDS`); a classification arriving after the window
-    closed is discarded rather than leaking into the *next*, unrelated motion
-    event's announcement.
-  - `on_motion` is awaited directly from `_announce_after_delay` — no extra
-    thread plumbing needed since `watch_motion` is already a coroutine.
+    `create_pullpoint_manager`/`PullMessages` flow as the retired PoC).
+    `discover_camera()` runs via `asyncio.to_thread` since it's blocking
+    WS-Discovery I/O, same reason as `castyt.py`'s Chromecast discovery.
+  - Classification for an object can arrive after its motion event, not
+    before. A confirmed motion event schedules `_announce_after_delay`
+    (tracked in `pending_tasks`, both to avoid premature GC and to gate
+    classification recording/overlapping evaluations to one at a time), which
+    waits `CLASSIFICATION_WAIT_SECONDS` before reading `last_object_class` and
+    invoking `on_motion`.
+  - The debounce cooldown (`DEBOUNCE_SECONDS`) only starts once a recognized
+    category is resolved, not the moment raw motion fires — otherwise an
+    unclassified event (wind, shadows) would suppress a real one for 30s.
   - `run_forever` wraps `watch_motion` in a retry loop so a transient camera or
     network failure can't crash the bot process.
   - `motion_detection_enabled()` gates the whole feature on `ONVIF_USER`/

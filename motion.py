@@ -80,7 +80,7 @@ def discover_camera():
 async def watch_motion(on_motion):
     """Subscribe to the camera's events and await on_motion(category) for each
     debounced motion event, where category is "person"/"animal"/"vehicle"/"unknown"."""
-    host, port = (ONVIF_HOST, ONVIF_PORT) if ONVIF_HOST else discover_camera()
+    host, port = (ONVIF_HOST, ONVIF_PORT) if ONVIF_HOST else await asyncio.to_thread(discover_camera)
     camera = ONVIFCamera(host, port, ONVIF_USER, ONVIF_PASS)
     await camera.update_xaddrs()
 
@@ -94,13 +94,14 @@ async def watch_motion(on_motion):
     pending_tasks = set()
 
     async def _announce_after_delay():
-        nonlocal last_object_class
-        # Classification events (if the camera supports them) tend to arrive
-        # shortly after the motion event they belong to, not before — wait a
-        # moment so a following one can still be picked up.
+        nonlocal last_object_class, last_announced
+        # Classification often arrives after its motion event, not before.
         await asyncio.sleep(CLASSIFICATION_WAIT_SECONDS)
         category = describe_object(last_object_class)
         last_object_class = ""
+        # Unclassified motion shouldn't block a real one from debouncing.
+        if category != "unknown":
+            last_announced = time.monotonic()
         logger.info("Motion detected (%s)", category)
         try:
             await on_motion(category)
@@ -121,11 +122,8 @@ async def watch_motion(on_motion):
 
                 if OBJECT_CLASS_TOPIC in topic:
                     class_types = items_repr.get("ClassTypes", "")
-                    # Only attribute this to a pending announcement, not a
-                    # future one — a stale classification lingering after the
-                    # window closed would get wrongly picked up by the next
-                    # unrelated motion event otherwise.
-                    if class_types and time.monotonic() - last_announced < CLASSIFICATION_WAIT_SECONDS:
+                    # Only while an evaluation is pending, else it could leak into the next event.
+                    if class_types and pending_tasks:
                         last_object_class = class_types
                         logger.info("Object classified: %s", last_object_class)
                     continue
@@ -134,11 +132,11 @@ async def watch_motion(on_motion):
                     continue
                 if not any(item.Value.lower() == "true" for item in simple_items):
                     continue
-                now = time.monotonic()
-                if now - last_announced < DEBOUNCE_SECONDS:
+                if time.monotonic() - last_announced < DEBOUNCE_SECONDS:
                     logger.info("Motion detected, debounced")
                     continue
-                last_announced = now
+                if pending_tasks:
+                    continue
                 task = asyncio.create_task(_announce_after_delay())
                 pending_tasks.add(task)
                 task.add_done_callback(pending_tasks.discard)
