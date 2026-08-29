@@ -3,6 +3,10 @@
 CucinaCast: a Telegram bot that searches YouTube and casts the result to a Nest Mini
 (Chromecast) speaker on the local network.
 
+When a change adds or changes a user-facing feature (a bot command, an env var
+affecting behavior, etc.), update `README.md` to match — it's the user-facing
+doc, kept separate from this file's internal architecture notes.
+
 ## Commands
 
 ```
