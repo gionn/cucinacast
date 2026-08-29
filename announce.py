@@ -3,18 +3,39 @@ import http.server
 import logging
 import os
 import socket
-import tempfile
 import threading
-from functools import partial
 
 from tts import DEFAULT_PATH, synthesize
 
 logger = logging.getLogger(__name__)
 
 ANNOUNCE_PORT = int(os.environ.get("ANNOUNCE_PORT", "8765"))
+_URL_PATH = f"/{DEFAULT_PATH.name}"
 
 _server_lock = threading.Lock()
 _server_started = False
+
+
+class _AnnounceHandler(http.server.BaseHTTPRequestHandler):
+    """Serves only the single announcement file — never the whole temp directory."""
+
+    def do_GET(self):
+        if self.path != _URL_PATH:
+            self.send_error(404)
+            return
+        try:
+            data = DEFAULT_PATH.read_bytes()
+        except OSError:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, format, *args):
+        logger.info("%s - %s", self.address_string(), format % args)
 
 
 def _get_lan_ip():
@@ -24,6 +45,11 @@ def _get_lan_ip():
     try:
         s.connect(("8.8.8.8", 80))
         return s.getsockname()[0]
+    except OSError as exc:
+        raise RuntimeError(
+            "Couldn't auto-detect a LAN IP for announcements (no network route?); "
+            "set ANNOUNCE_HOST explicitly"
+        ) from exc
     finally:
         s.close()
 
@@ -33,8 +59,7 @@ def _ensure_server():
     with _server_lock:
         if _server_started:
             return
-        handler = partial(http.server.SimpleHTTPRequestHandler, directory=tempfile.gettempdir())
-        httpd = http.server.ThreadingHTTPServer(("0.0.0.0", ANNOUNCE_PORT), handler)
+        httpd = http.server.ThreadingHTTPServer(("0.0.0.0", ANNOUNCE_PORT), _AnnounceHandler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         _server_started = True
         logger.info("Announcement HTTP server listening on port %s", ANNOUNCE_PORT)

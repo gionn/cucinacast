@@ -78,8 +78,8 @@ def discover_camera():
 
 
 async def watch_motion(on_motion):
-    """Subscribe to the camera's events and await on_motion(description) for each
-    debounced motion event, where description is a phrase like "a person"/"someone"."""
+    """Subscribe to the camera's events and await on_motion(category) for each
+    debounced motion event, where category is "person"/"animal"/"vehicle"/"unknown"."""
     host, port = (ONVIF_HOST, ONVIF_PORT) if ONVIF_HOST else discover_camera()
     camera = ONVIFCamera(host, port, ONVIF_USER, ONVIF_PASS)
     await camera.update_xaddrs()
@@ -99,11 +99,11 @@ async def watch_motion(on_motion):
         # shortly after the motion event they belong to, not before — wait a
         # moment so a following one can still be picked up.
         await asyncio.sleep(CLASSIFICATION_WAIT_SECONDS)
-        description = describe_object(last_object_class)
+        category = describe_object(last_object_class)
         last_object_class = ""
-        logger.info("Motion detected (%s)", description)
+        logger.info("Motion detected (%s)", category)
         try:
-            await on_motion(description)
+            await on_motion(category)
         except Exception:
             logger.exception("on_motion callback failed")
 
@@ -121,7 +121,11 @@ async def watch_motion(on_motion):
 
                 if OBJECT_CLASS_TOPIC in topic:
                     class_types = items_repr.get("ClassTypes", "")
-                    if class_types:
+                    # Only attribute this to a pending announcement, not a
+                    # future one — a stale classification lingering after the
+                    # window closed would get wrongly picked up by the next
+                    # unrelated motion event otherwise.
+                    if class_types and time.monotonic() - last_announced < CLASSIFICATION_WAIT_SECONDS:
                         last_object_class = class_types
                         logger.info("Object classified: %s", last_object_class)
                     continue

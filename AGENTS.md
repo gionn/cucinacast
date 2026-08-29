@@ -79,18 +79,19 @@ the real Nest Mini and confirm audio actually plays.
 - `motion.py` — ONVIF motion-detection logic, no Telegram/TTS/casting dependency
   (mirrors `castyt.py`'s separation).
   - `watch_motion(on_motion)` subscribes to the camera's pullpoint events (same
-    `create_pullpoint_manager`/`PullMessages` flow as the retired PoC), debounces
-    motion (`DEBOUNCE_SECONDS`), and maps vendor-specific `ClassTypes` values (e.g.
-    "Human"/"Animal"/"Vehicle") to natural-language phrases via `describe_object`,
-    keyword-matched with a generic ("someone") fallback since classification
-    support/vocabulary varies by camera.
+    `create_pullpoint_manager`/`PullMessages` flow as the retired PoC) and
+    debounces motion (`DEBOUNCE_SECONDS`).
   - On some cameras the classification event for an object arrives *after* the
     motion event it belongs to, not before. A confirmed motion event schedules
     `_announce_after_delay` (an `asyncio.create_task`, tracked in `pending_tasks`
     to avoid premature GC) which waits `CLASSIFICATION_WAIT_SECONDS` before
     reading `last_object_class` and invoking `on_motion` — this lets a
     same-batch classification event that follows the motion event still be
-    picked up.
+    picked up. Classification events are only recorded into `last_object_class`
+    while that window is open (`time.monotonic() - last_announced <
+    CLASSIFICATION_WAIT_SECONDS`); a classification arriving after the window
+    closed is discarded rather than leaking into the *next*, unrelated motion
+    event's announcement.
   - `on_motion` is awaited directly from `_announce_after_delay` — no extra
     thread plumbing needed since `watch_motion` is already a coroutine.
   - `run_forever` wraps `watch_motion` in a retry loop so a transient camera or
@@ -119,9 +120,13 @@ the real Nest Mini and confirm audio actually plays.
   - The audio file is a single fixed path (`tts.DEFAULT_PATH`), overwritten per
     announcement — no per-announcement filenames or cleanup, since motion events
     are already debounced and only one announcement is ever in flight.
+  - `_AnnounceHandler` only serves that one fixed path (404s everything else) —
+    deliberately not `SimpleHTTPRequestHandler` over the whole temp directory,
+    which would expose unrelated temp files on a shared machine.
   - `_get_lan_ip()` detects the host's outbound LAN IP (not `localhost`, which the
     Chromecast can't resolve) via a connect-less UDP socket trick; override with
-    `ANNOUNCE_HOST` for multi-NIC machines.
+    `ANNOUNCE_HOST` for multi-NIC machines or networks without external
+    connectivity (where the detection trick itself would fail).
 - `Player.announce(url)` in `castyt.py` interrupts current playback to play an
   arbitrary announcement URL, tracked via an `_announcing` flag on `Player`. The
   `new_media_status` FINISHED callback branches on this flag: after an
