@@ -56,10 +56,20 @@ Mini and confirm audio actually plays.
   - Device discovery (`_get_device`) retries a few times since local mDNS discovery is
     occasionally flaky.
 - `bot.py` — python-telegram-bot wiring only; delegates all real work to
-  `castyt.player`. Handlers (`play`, `stop`) call into `Player` via
+  `castyt.player`. Handlers (`play`, `announce`, `stop`) call into `Player` via
   `asyncio.to_thread(...)` — this is required, not just a style choice: pychromecast's
   discovery does blocking zeroconf I/O, which conflicts with running inside
   python-telegram-bot's asyncio event loop if called directly on that thread.
+  - `/play` and `/announce` both need a text argument that Telegram has no way to
+    require up front — tapping either from the command menu always fires the bare
+    command with no args. Each command handler falls back to a two-step prompt: if
+    called with no args, it records the user id in a pending-state set
+    (`_awaiting_play_text`/`_awaiting_announce_text`) and asks for the missing text;
+    the next plain-text message from that user is consumed by `_route_text` (the
+    catch-all `MessageHandler`), which checks the pending sets before falling back to
+    its default of treating the text as a `/play` query — this keeps "just send a
+    plain text message to search" working unchanged for anyone who never invoked
+    `/announce`/bare `/play` in the first place.
   - Access control: `OWNER_USER_ID` (required) is always implicitly allowed and gets
     notified of unauthorized attempts; `ALLOWED_USER_IDS` (optional, comma-separated)
     additionally allow-lists other users. If `ALLOWED_USER_IDS` is empty, the bot is
