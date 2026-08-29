@@ -264,6 +264,9 @@ async def _send_motion_clip(caption: str) -> None:
             path.unlink(missing_ok=True)
 
 
+_background_tasks = set()
+
+
 async def _on_motion(category: str) -> None:
     logger.info("Motion detected: %s", category)
     if category == "unknown":
@@ -273,10 +276,14 @@ async def _on_motion(category: str) -> None:
         logger.info("Quiet hours active, skipping motion announcement (%s)", category)
         return
     text = phrases.announcement_text(category)
-    tasks = [_do_announce_motion(text)]
     if _video_clips_enabled:
-        tasks.append(_send_motion_clip(text))
-    await asyncio.gather(*tasks)
+        # Run in the background rather than awaiting: a slow Telegram upload
+        # would otherwise delay motion.py's caller from returning, extending
+        # the real debounce window past DEBOUNCE_SECONDS.
+        task = asyncio.create_task(_send_motion_clip(text))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+    await _do_announce_motion(text)
 
 
 _motion_task = None

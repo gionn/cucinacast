@@ -171,12 +171,21 @@ async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=duration_seconds + 15)
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=duration_seconds + 15)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        path.unlink(missing_ok=True)
+        raise RuntimeError("ffmpeg timed out capturing motion clip") from None
+
     if proc.returncode != 0:
         path.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"ffmpeg failed capturing motion clip: {stderr.decode(errors='replace')}"
-        )
+        message = stderr.decode(errors="replace")
+        for secret in (password, urllib.parse.quote(password, safe="")):
+            if secret:
+                message = message.replace(secret, "***")
+        raise RuntimeError(f"ffmpeg failed capturing motion clip: {message}")
     return path
 
 
