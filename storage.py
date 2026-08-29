@@ -13,9 +13,7 @@ CACHE_TTL_SECONDS = 7 * 24 * 3600
 
 def _connect():
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS plays (query TEXT, video_id TEXT, played_at REAL)"
-    )
+    conn.execute("CREATE TABLE IF NOT EXISTS plays (query TEXT, video_id TEXT, played_at REAL)")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS search_cache "
         "(query TEXT, video_id TEXT, title TEXT, view_count INTEGER, fetched_at REAL)"
@@ -67,8 +65,5 @@ def store_pool(query, entries):
         conn.executemany(
             "INSERT INTO search_cache (query, video_id, title, view_count, fetched_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            [
-                (query, e["id"], e["title"], e.get("view_count"), fetched_at)
-                for e in entries
-            ],
+            [(query, e["id"], e["title"], e.get("view_count"), fetched_at) for e in entries],
         )

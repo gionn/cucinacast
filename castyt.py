@@ -47,8 +47,7 @@ def _fetch_live(query, fetch_count):
         if not entries:
             raise ValueError(f"No YouTube results for {query!r}")
     return [
-        {"id": e["id"], "title": e["title"], "view_count": e.get("view_count")}
-        for e in entries
+        {"id": e["id"], "title": e["title"], "view_count": e.get("view_count")} for e in entries
     ]
 
 
