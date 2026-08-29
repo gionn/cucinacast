@@ -2,6 +2,7 @@
 
 import logging
 import os
+import random
 import threading
 import time
 
@@ -10,9 +11,12 @@ from catt.error import CastError
 from catt.stream_info import StreamInfo
 from yt_dlp import YoutubeDL
 
+import storage
+
 logger = logging.getLogger(__name__)
 
 SEARCH_RESULT_COUNT = 5
+SEARCH_POOL_SIZE = 20
 
 DISCOVERY_RETRIES = 3
 DISCOVERY_RETRY_DELAY_SECONDS = 3
@@ -35,20 +39,36 @@ def _get_device():
     raise last_error
 
 
-def search_youtube(query, count=SEARCH_RESULT_COUNT):
+def _fetch_live(query, fetch_count):
     opts = {"quiet": True, "extract_flat": True}
     with YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(f"ytsearch{count}:{query}", download=False)
+        info = ydl.extract_info(f"ytsearch{fetch_count}:{query}", download=False)
         entries = info.get("entries") or []
         if not entries:
             raise ValueError(f"No YouTube results for {query!r}")
+    return [
+        {"id": e["id"], "title": e["title"], "view_count": e.get("view_count")} for e in entries
+    ]
+
+
+def search_youtube(query, count=SEARCH_RESULT_COUNT, exclude_ids=frozenset()):
+    fetch_count = max(count, SEARCH_POOL_SIZE) + len(exclude_ids)
+    entries = storage.cached_pool(query, count)
+    candidates = [e for e in (entries or []) if e["id"] not in exclude_ids]
+    if entries is None or len(candidates) < count:
+        entries = _fetch_live(query, fetch_count)
+        storage.store_pool(query, entries)
+        candidates = [e for e in entries if e["id"] not in exclude_ids]
+    candidates.sort(key=lambda e: e.get("view_count") or 0, reverse=True)
+    top = candidates[:count]
+    random.shuffle(top)
     return [
         {
             "id": e["id"],
             "title": e["title"],
             "url": f"https://www.youtube.com/watch?v={e['id']}",
         }
-        for e in entries
+        for e in top
     ]
 
 
@@ -161,6 +181,7 @@ class Player:
             entry = self.queue[self.index]
             try:
                 self._play_current_locked()
+                storage.record_play(self.query, entry["id"])
                 return entry
             except CastError:
                 logger.exception("Skipping unplayable track %r", entry.get("title"))
@@ -173,16 +194,18 @@ class Player:
 
     def _grow_queue_locked(self):
         seen_ids = {e["id"] for e in self.queue}
+        exclude_ids = seen_ids | storage.recent_ids(self.query)
         try:
-            entries = search_youtube(self.query, count=len(self.queue) + SEARCH_RESULT_COUNT)
+            entries = search_youtube(self.query, count=SEARCH_RESULT_COUNT, exclude_ids=exclude_ids)
         except Exception:
             logger.exception("Failed to fetch more search results for %r", self.query)
             return
-        new_entries = [e for e in entries if e["id"] not in seen_ids]
-        self.queue.extend(new_entries)
+        self.queue.extend(entries)
 
     def play_search(self, query):
-        entries = search_youtube(query)
+        entries = search_youtube(
+            query, count=SEARCH_POOL_SIZE, exclude_ids=storage.recent_ids(query)
+        )
         with self._lock:
             self.query = query
             self.queue = entries
