@@ -2,3 +2,6 @@
 __pycache__/
 .venv/
 .claude/
+cucinacast.db
+cucinacast.db-journal
+cucinacast.db-wal
