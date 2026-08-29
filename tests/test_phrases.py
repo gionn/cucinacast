@@ -73,4 +73,26 @@ def test_in_quiet_hours_same_day_window(monkeypatch):
 def test_in_quiet_hours_defaults_to_now_when_not_given(monkeypatch):
     monkeypatch.setenv("QUIET_HOURS_START", "0")
     monkeypatch.setenv("QUIET_HOURS_END", "23")
-    assert phrases.in_quiet_hours() == (0 <= datetime.now().hour < 23)
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _at_hour(10)
+
+    monkeypatch.setattr(phrases, "datetime", _FixedDatetime)
+
+    assert phrases.in_quiet_hours() is True
+
+
+def test_in_quiet_hours_invalid_start_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("QUIET_HOURS_START", "not-a-number")
+    monkeypatch.delenv("QUIET_HOURS_END", raising=False)
+    assert phrases.in_quiet_hours(_at_hour(23)) is True
+    assert phrases.in_quiet_hours(_at_hour(12)) is False
+
+
+def test_in_quiet_hours_out_of_range_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("QUIET_HOURS_END", "24")
+    monkeypatch.delenv("QUIET_HOURS_START", raising=False)
+    assert phrases.in_quiet_hours(_at_hour(7)) is True
+    assert phrases.in_quiet_hours(_at_hour(8)) is False
