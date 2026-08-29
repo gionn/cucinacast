@@ -243,6 +243,23 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error("Unhandled exception while processing update %r", update, exc_info=context.error)
 
 
+async def _do_announce_motion(text: str) -> None:
+    try:
+        url = await asyncio.to_thread(synthesize_and_serve, text, phrases.tts_lang())
+        await asyncio.to_thread(player.announce, url)
+    except Exception:
+        logger.exception("Failed to announce motion event")
+
+
+async def _send_motion_clip() -> None:
+    try:
+        path = await motion.capture_clip()
+        with open(path, "rb") as clip:
+            await _bot.send_video(chat_id=OWNER_USER_ID, video=clip)
+    except Exception:
+        logger.exception("Failed to capture/send motion clip")
+
+
 async def _on_motion(category: str) -> None:
     logger.info("Motion detected: %s", category)
     if category == "unknown":
@@ -252,18 +269,20 @@ async def _on_motion(category: str) -> None:
         logger.info("Quiet hours active, skipping motion announcement (%s)", category)
         return
     text = phrases.announcement_text(category)
-    try:
-        url = await asyncio.to_thread(synthesize_and_serve, text, phrases.tts_lang())
-        await asyncio.to_thread(player.announce, url)
-    except Exception:
-        logger.exception("Failed to announce motion event")
+    tasks = [_do_announce_motion(text)]
+    if _video_clips_enabled:
+        tasks.append(_send_motion_clip())
+    await asyncio.gather(*tasks)
 
 
 _motion_task = None
+_bot = None
+_video_clips_enabled = False
 
 
 async def post_init(app: Application) -> None:
-    global _motion_task
+    global _motion_task, _bot, _video_clips_enabled
+    _bot = app.bot
     await app.bot.set_my_commands(
         [
             BotCommand("play", "Search YouTube and play"),
@@ -274,6 +293,11 @@ async def post_init(app: Application) -> None:
         ]
     )
     if motion.motion_detection_enabled():
+        _video_clips_enabled = motion.ffmpeg_available()
+        if not _video_clips_enabled:
+            logger.warning(
+                "ffmpeg not found on PATH, motion clips disabled (audio announcements still work)"
+            )
         # post_init runs before Application.start(), so app.create_task() would
         # warn and not track this task for stop() to await; track it ourselves.
         _motion_task = asyncio.create_task(motion.run_forever(_on_motion))
