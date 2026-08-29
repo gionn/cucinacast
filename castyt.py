@@ -195,9 +195,7 @@ class Player:
         seen_ids = {e["id"] for e in self.queue}
         exclude_ids = seen_ids | storage.recent_ids(self.query)
         try:
-            entries = search_youtube(
-                self.query, count=len(self.queue) + SEARCH_RESULT_COUNT, exclude_ids=exclude_ids
-            )
+            entries = search_youtube(self.query, count=SEARCH_RESULT_COUNT, exclude_ids=exclude_ids)
         except Exception:
             logger.exception("Failed to fetch more search results for %r", self.query)
             return
