@@ -251,11 +251,11 @@ async def _do_announce_motion(text: str) -> None:
         logger.exception("Failed to announce motion event")
 
 
-async def _send_motion_clip() -> None:
+async def _send_motion_clip(caption: str) -> None:
     try:
         path = await motion.capture_clip()
         with open(path, "rb") as clip:
-            await _bot.send_video(chat_id=OWNER_USER_ID, video=clip)
+            await _bot.send_video(chat_id=OWNER_USER_ID, video=clip, caption=caption)
     except Exception:
         logger.exception("Failed to capture/send motion clip")
 
@@ -271,7 +271,7 @@ async def _on_motion(category: str) -> None:
     text = phrases.announcement_text(category)
     tasks = [_do_announce_motion(text)]
     if _video_clips_enabled:
-        tasks.append(_send_motion_clip())
+        tasks.append(_send_motion_clip(text))
     await asyncio.gather(*tasks)
 
 
