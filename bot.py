@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Telegram bot: search YouTube and cast the top result to the Nest Mini."""
+
 import asyncio
 import logging
 import os
 import sys
 
 from dotenv import load_dotenv
-
-load_dotenv()
-
 from telegram import BotCommand, Update
 from telegram.error import Conflict
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
@@ -17,6 +15,8 @@ import motion
 import phrases
 from announce import synthesize_and_serve
 from castyt import player
+
+load_dotenv()
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL)
@@ -72,7 +72,9 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     query = " ".join(context.args) if context.args else update.message.text
     if not query:
-        await update.message.reply_text("Send a song/video name to play, e.g. /play bohemian rhapsody")
+        await update.message.reply_text(
+            "Send a song/video name to play, e.g. /play bohemian rhapsody"
+        )
         return
 
     await update.message.reply_text(f"Searching for: {query}...")
@@ -121,7 +123,7 @@ async def _on_motion(category: str) -> None:
         return
     text = phrases.announcement_text(category)
     try:
-        url = await asyncio.to_thread(synthesize_and_serve, text, phrases.TTS_LANG)
+        url = await asyncio.to_thread(synthesize_and_serve, text, phrases.tts_lang())
         await asyncio.to_thread(player.announce, url)
     except Exception:
         logger.exception("Failed to announce motion event")

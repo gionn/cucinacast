@@ -1,4 +1,5 @@
 """Serve synthesized TTS announcements over HTTP for the Chromecast to fetch."""
+
 import http.server
 import logging
 import os
@@ -9,11 +10,14 @@ from tts import DEFAULT_PATH, synthesize
 
 logger = logging.getLogger(__name__)
 
-ANNOUNCE_PORT = int(os.environ.get("ANNOUNCE_PORT", "8765"))
 _URL_PATH = f"/{DEFAULT_PATH.name}"
 
 _server_lock = threading.Lock()
 _server_started = False
+
+
+def _announce_port():
+    return int(os.environ.get("ANNOUNCE_PORT", "8765"))
 
 
 class _AnnounceHandler(http.server.BaseHTTPRequestHandler):
@@ -59,10 +63,11 @@ def _ensure_server():
     with _server_lock:
         if _server_started:
             return
-        httpd = http.server.ThreadingHTTPServer(("0.0.0.0", ANNOUNCE_PORT), _AnnounceHandler)
+        port = _announce_port()
+        httpd = http.server.ThreadingHTTPServer(("0.0.0.0", port), _AnnounceHandler)  # noqa: S104
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         _server_started = True
-        logger.info("Announcement HTTP server listening on port %s", ANNOUNCE_PORT)
+        logger.info("Announcement HTTP server listening on port %s", port)
 
 
 def synthesize_and_serve(text, lang="en"):
@@ -70,4 +75,4 @@ def synthesize_and_serve(text, lang="en"):
     server is running, and return a LAN-reachable URL for the Chromecast to fetch."""
     synthesize(text, lang=lang, path=DEFAULT_PATH)
     _ensure_server()
-    return f"http://{_get_lan_ip()}:{ANNOUNCE_PORT}/{DEFAULT_PATH.name}"
+    return f"http://{_get_lan_ip()}:{_announce_port()}/{DEFAULT_PATH.name}"
