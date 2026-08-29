@@ -1,9 +1,29 @@
 # CucinaCast
 
 Telegram bot that searches YouTube and casts the top result to a Nest Mini (Chromecast).
+It can also speak a custom announcement on demand, and, with an ONVIF camera configured,
+announce motion (person/animal/vehicle) automatically.
 
 Named after "cucina" (Italian for kitchen) — the Nest Mini it talks to lives in the
 kitchen.
+
+## Quickstart
+
+```
+git clone <this repo> && cd cucinacast
+./setup.sh
+```
+
+Fill in the scaffolded `.env` (at minimum `TELEGRAM_BOT_TOKEN` and `OWNER_USER_ID`,
+see [Setup](#setup) below), then:
+
+```
+sudo systemctl start cucinacast
+sudo journalctl -u cucinacast -f
+```
+
+Message the bot on Telegram to confirm it replies, then send it a song name to
+play it on the Nest Mini.
 
 ## Setup
 
@@ -80,6 +100,19 @@ sudo systemctl start cucinacast
 sudo journalctl -u cucinacast -f
 ```
 
+## Development
+
+```
+./.venv/bin/pip install -r requirements-dev.txt
+./.venv/bin/python -m pytest
+```
+
+`requirements-dev.txt` pulls in `requirements.txt` plus `pytest`. The test suite
+covers the search-ranking/caching logic in `castyt.py` and the play-history storage
+logic in `storage.py`, with the actual `yt-dlp`/sqlite calls mocked/isolated.
+Everything that touches the real Chromecast, camera, or Telegram API has no
+automated coverage — verify those manually against the real Nest Mini.
+
 ## Bot commands
 
 - `/start` — explains what the bot does and lists the commands below.
@@ -89,12 +122,15 @@ sudo journalctl -u cucinacast -f
   finishes; when the queue runs out it fetches more results for the same query and
   keeps going, indefinitely, until `/stop` is sent. Unplayable results (private/removed
   videos) are skipped automatically.
+- `/announce <text>` — speak a custom message on the Nest Mini, interrupting current
+  playback, then resume it from approximately where it left off. Same two-step prompt
+  as `/play` if sent with no text.
 - `/stop` — stop playback and clear the queue.
 - `/whoami` — reply with your Telegram user id, to put in `OWNER_USER_ID` /
   `ALLOWED_USER_IDS`.
 
-`/start` and `/whoami` are intentionally left out of the bot's `/`-menu (only `/play`
-and `/stop` show there) but still work when typed.
+`/start` and `/whoami` are intentionally left out of the bot's `/`-menu (only `/play`,
+`/announce`, and `/stop` show there) but still work when typed.
 
 ## Motion detection announcements
 
