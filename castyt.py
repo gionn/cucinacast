@@ -63,6 +63,18 @@ class Player:
             self._device._cast.media_controller.register_status_listener(self)
         return self._device
 
+    def _reset_cast_device_locked(self):
+        """Drop the current connection so the next play attempt rediscovers
+        the device from scratch. Needed because pychromecast's background
+        reconnect thread can get stuck spinning on a Zeroconf instance that
+        catt already stopped, silently keeping the connection dead forever."""
+        if self._device is not None:
+            try:
+                self._device._cast.disconnect(blocking=False)
+            except Exception:
+                logger.exception("Error disconnecting stale Chromecast device")
+            self._device = None
+
     def new_media_status(self, status):
         if status.player_state == "IDLE" and status.idle_reason == "FINISHED":
             with self._lock:
@@ -98,6 +110,10 @@ class Player:
             try:
                 self._play_current_locked()
                 return entry
+            except CastError:
+                logger.exception("Skipping unplayable track %r", entry.get("title"))
+                self._reset_cast_device_locked()
+                self.index += 1
             except Exception:
                 logger.exception("Skipping unplayable track %r", entry.get("title"))
                 self.index += 1
