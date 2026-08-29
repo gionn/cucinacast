@@ -52,12 +52,13 @@ def _fetch_live(query, fetch_count):
 
 
 def search_youtube(query, count=SEARCH_RESULT_COUNT, exclude_ids=frozenset()):
-    fetch_count = max(count, SEARCH_POOL_SIZE)
+    fetch_count = max(count, SEARCH_POOL_SIZE) + len(exclude_ids)
     entries = storage.cached_pool(query, count)
-    if entries is None:
+    candidates = [e for e in (entries or []) if e["id"] not in exclude_ids]
+    if entries is None or len(candidates) < count:
         entries = _fetch_live(query, fetch_count)
         storage.store_pool(query, entries)
-    candidates = [e for e in entries if e["id"] not in exclude_ids]
+        candidates = [e for e in entries if e["id"] not in exclude_ids]
     candidates.sort(key=lambda e: e.get("view_count") or 0, reverse=True)
     top = candidates[:count]
     random.shuffle(top)

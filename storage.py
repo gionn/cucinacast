@@ -29,7 +29,7 @@ def record_play(query, video_id):
         )
         conn.execute(
             "DELETE FROM plays WHERE query = ? AND rowid NOT IN ("
-            "SELECT rowid FROM plays WHERE query = ? ORDER BY played_at DESC LIMIT ?"
+            "SELECT rowid FROM plays WHERE query = ? ORDER BY played_at DESC, rowid DESC LIMIT ?"
             ")",
             (query, query, HISTORY_LIMIT),
         )
@@ -38,7 +38,8 @@ def record_play(query, video_id):
 def recent_ids(query):
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT video_id FROM plays WHERE query = ? ORDER BY played_at DESC LIMIT ?",
+            "SELECT video_id FROM plays WHERE query = ? "
+            "ORDER BY played_at DESC, rowid DESC LIMIT ?",
             (query, HISTORY_LIMIT),
         ).fetchall()
     return {row[0] for row in rows}

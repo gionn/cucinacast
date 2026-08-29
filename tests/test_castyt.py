@@ -62,6 +62,24 @@ def test_search_youtube_uses_cache_for_sparse_query(monkeypatch):
     assert calls == ["query"]
 
 
+def test_search_youtube_refetches_when_exclusions_exhaust_cache(monkeypatch):
+    """If exclude_ids filters the cached pool down below count, search_youtube
+    must fall back to a live fetch instead of returning too few results."""
+    calls = []
+
+    def fake_fetch(query, fetch_count):
+        calls.append(fetch_count)
+        return _fake_entries()
+
+    monkeypatch.setattr(castyt, "_fetch_live", fake_fetch)
+
+    castyt.search_youtube("query", count=2)
+    results = castyt.search_youtube("query", count=2, exclude_ids={"high", "mid"})
+
+    assert len(calls) == 2
+    assert {e["id"] for e in results} == {"low"}
+
+
 def test_search_youtube_returns_urls(monkeypatch):
     monkeypatch.setattr(castyt, "_fetch_live", lambda query, fetch_count: _fake_entries())
 

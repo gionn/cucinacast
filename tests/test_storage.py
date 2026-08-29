@@ -35,6 +35,14 @@ def test_record_play_prunes_even_when_same_id_replayed(monkeypatch):
     assert row_count <= 3
 
 
+def test_record_play_breaks_played_at_ties_by_insertion_order(monkeypatch):
+    monkeypatch.setattr(storage, "HISTORY_LIMIT", 3)
+    monkeypatch.setattr(storage.time, "time", lambda: 1000.0)
+    for i in range(5):
+        storage.record_play("daft punk", f"id{i}")
+    assert storage.recent_ids("daft punk") == {"id2", "id3", "id4"}
+
+
 def test_cached_pool_miss_when_absent():
     assert storage.cached_pool("daft punk", min_count=5) is None
 
