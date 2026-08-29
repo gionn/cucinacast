@@ -248,6 +248,9 @@ async def _on_motion(category: str) -> None:
     if category == "unknown":
         logger.info("Unclassified motion, skipping announcement")
         return
+    if phrases.in_quiet_hours():
+        logger.info("Quiet hours active, skipping motion announcement (%s)", category)
+        return
     text = phrases.announcement_text(category)
     try:
         url = await asyncio.to_thread(synthesize_and_serve, text, phrases.tts_lang())

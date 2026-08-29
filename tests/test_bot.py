@@ -181,7 +181,18 @@ def test_on_motion_skips_unknown_category(monkeypatch):
     synth_mock.assert_not_called()
 
 
+def test_on_motion_skips_during_quiet_hours(monkeypatch):
+    monkeypatch.setattr(bot.phrases, "in_quiet_hours", lambda: True)
+    synth_mock = AsyncMock()
+    monkeypatch.setattr(bot, "synthesize_and_serve", synth_mock)
+
+    _run(bot._on_motion("person"))
+
+    synth_mock.assert_not_called()
+
+
 def test_on_motion_announces_known_category(monkeypatch):
+    monkeypatch.setattr(bot.phrases, "in_quiet_hours", lambda: False)
     monkeypatch.setattr(bot, "synthesize_and_serve", lambda text, lang: "http://host/announce.mp3")
     announce_mock = Mock()
     monkeypatch.setattr(bot.player, "announce", announce_mock)
