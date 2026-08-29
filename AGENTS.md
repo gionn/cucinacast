@@ -17,14 +17,15 @@ NEST_DEVICE_NAME="Cucinino" ./.venv/bin/python cast_test.py "some song name"
 ./.venv/bin/python bot.py
 
 # syntax-check after edits (no test suite exists)
-./.venv/bin/python -m py_compile bot.py castyt.py cast_test.py
+./.venv/bin/python -m py_compile bot.py castyt.py cast_test.py motion.py announce.py
 
 # install/refresh as a systemd service (creates .venv, installs deps every run)
 ./setup.sh
 ```
 
 Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Optional:
-`NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`.
+`NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
+`ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`.
 
 There is no test suite. Verification is manual: run `cast_test.py` or the bot against
 the real Nest Mini and confirm audio actually plays.
@@ -62,3 +63,40 @@ the real Nest Mini and confirm audio actually plays.
     notified of unauthorized attempts; `ALLOWED_USER_IDS` (optional, comma-separated)
     additionally allow-lists other users. If `ALLOWED_USER_IDS` is empty, the bot is
     open to everyone.
+  - `post_init` starts `motion.run_forever(_on_motion)` as a background PTB task
+    (`app.create_task`, so it's tracked/cancelled on shutdown and exceptions get
+    logged) only if `motion.motion_detection_enabled()` is true — bots without a
+    camera configured are unaffected. `_on_motion` builds an announcement sentence
+    from the motion description, then calls `announce.synthesize_and_serve` and
+    `player.announce` via `asyncio.to_thread`, same pattern as `play`/`stop`.
+- `motion.py` — ONVIF motion-detection logic, no Telegram/TTS/casting dependency
+  (mirrors `castyt.py`'s separation).
+  - `watch_motion(on_motion)` subscribes to the camera's pullpoint events (same
+    `create_pullpoint_manager`/`PullMessages` flow as the retired PoC), debounces
+    motion (`DEBOUNCE_SECONDS`), and maps vendor-specific `ClassTypes` values (e.g.
+    "Human"/"Animal"/"Vehicle") to natural-language phrases via `describe_object`,
+    keyword-matched with a generic ("someone") fallback since classification
+    support/vocabulary varies by camera.
+  - `on_motion` is awaited directly from the event loop — no extra
+    thread/task plumbing needed since `watch_motion` is already a coroutine.
+  - `run_forever` wraps `watch_motion` in a retry loop so a transient camera or
+    network failure can't crash the bot process.
+  - `motion_detection_enabled()` gates the whole feature on `ONVIF_USER`/
+    `ONVIF_PASS` being set — both are optional at the bot level.
+- `announce.py` — TTS synthesis (via `gTTS`, chosen since the project already
+  requires internet for YouTube) plus a small stdlib `ThreadingHTTPServer` to serve
+  the resulting MP3 over the LAN, since the Chromecast can only play HTTP(S) URLs,
+  not local file paths.
+  - The audio file is a single fixed path, overwritten per announcement — no
+    per-announcement filenames or cleanup, since motion events are already
+    debounced and only one announcement is ever in flight.
+  - `_get_lan_ip()` detects the host's outbound LAN IP (not `localhost`, which the
+    Chromecast can't resolve) via a connect-less UDP socket trick; override with
+    `ANNOUNCE_HOST` for multi-NIC machines.
+- `Player.announce(url)` in `castyt.py` interrupts current playback to play an
+  arbitrary announcement URL, tracked via an `_announcing` flag on `Player`. The
+  `new_media_status` FINISHED callback branches on this flag: after an
+  announcement it resumes the current queue entry from the start (no seek/resume-
+  position tracking — accepted simplification); otherwise it advances the queue as
+  before. `stop()` also clears `_announcing` so a `/stop` mid-announcement can't
+  leave a stale flag.

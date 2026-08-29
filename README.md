@@ -24,6 +24,8 @@ ALLOWED_USER_IDS=
 
 Environment variables:
 
+Bot / casting:
+
 - `TELEGRAM_BOT_TOKEN` — required, from @BotFather.
 - `NEST_DEVICE_NAME` — Chromecast friendly name to cast to (e.g. `Cucinino`, found via
   `./.venv/bin/catt scan`). If unset, `catt`'s configured default device is used.
@@ -36,6 +38,19 @@ Environment variables:
 - `HTTPX_LOG_LEVEL` — optional, log level for the `httpx` library (used internally by
   `python-telegram-bot` for polling). Defaults to `WARNING` to avoid flooding the logs
   with a line per poll request; set to `INFO` or `DEBUG` for verbose HTTP logging.
+
+Motion detection / doorbell announcements (see below — all optional, and the
+feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
+
+- `ONVIF_USER` / `ONVIF_PASS` — ONVIF camera credentials. If either is unset,
+  motion detection is disabled and the bot behaves exactly as without a camera.
+- `ONVIF_HOST` / `ONVIF_PORT` — the camera's address. If `ONVIF_HOST` is unset, the
+  camera is auto-discovered via WS-Discovery on the LAN.
+- `ANNOUNCE_PORT` — local port used to serve TTS announcement audio to the
+  Chromecast (default `8765`).
+- `ANNOUNCE_HOST` — override the LAN IP advertised to the Chromecast for fetching
+  announcement audio (auto-detected by default; only needed on multi-NIC
+  machines).
 
 ## Try casting standalone
 
@@ -81,6 +96,15 @@ sudo journalctl -u cucinacast -f
 
 `/start` and `/whoami` are intentionally left out of the bot's `/`-menu (only `/play`
 and `/stop` show there) but still work when typed.
+
+## Motion detection announcements
+
+If `ONVIF_USER` and `ONVIF_PASS` are set, the bot watches the configured ONVIF
+camera for motion. On motion, it interrupts whatever is playing (or the idle Nest
+Mini) to announce "Someone is at the door", naming a person/animal/vehicle instead
+when the camera's object classification says so. Motion events are debounced (one
+announcement per 30s). Once the announcement finishes, the interrupted track
+resumes — from the start, not the exact position it was interrupted at.
 
 ## Known limitation
 

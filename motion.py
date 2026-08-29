@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""PoC: watch an ONVIF camera for motion events."""
+"""Watch an ONVIF camera for motion events, no Telegram/TTS/casting dependency."""
 import asyncio
 import datetime
 import logging
@@ -7,23 +6,15 @@ import os
 import time
 import urllib.parse
 
-from lxml import etree
-from dotenv import load_dotenv
 from onvif import ONVIFCamera
 from wsdiscovery.discovery import ThreadedWSDiscovery as WSDiscovery
 
-load_dotenv()
-
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.setLevel(LOG_LEVEL)
 
 ONVIF_HOST = os.environ.get("ONVIF_HOST")
 ONVIF_PORT = int(os.environ.get("ONVIF_PORT", "80"))
-ONVIF_USER = os.environ["ONVIF_USER"]
-ONVIF_PASS = os.environ["ONVIF_PASS"]
+ONVIF_USER = os.environ.get("ONVIF_USER")
+ONVIF_PASS = os.environ.get("ONVIF_PASS")
 
 DISCOVERY_TIMEOUT_SECONDS = 5
 
@@ -33,6 +24,30 @@ DEBOUNCE_SECONDS = 30
 SUBSCRIPTION_INTERVAL = datetime.timedelta(minutes=10)
 PULL_TIMEOUT = datetime.timedelta(seconds=10)
 PULL_MESSAGE_LIMIT = 10
+
+_CLASS_KEYWORDS = {
+    "human": "a person",
+    "person": "a person",
+    "face": "a person",
+    "animal": "an animal",
+    "pet": "an animal",
+    "vehicle": "a vehicle",
+    "car": "a vehicle",
+}
+
+
+def motion_detection_enabled():
+    return bool(ONVIF_USER and ONVIF_PASS)
+
+
+def describe_object(class_types):
+    """Map a vendor-specific ONVIF ClassTypes string (e.g. "Human", "Animal") to
+    a natural-language phrase, falling back to generic wording when absent/unrecognized."""
+    lowered = (class_types or "").lower()
+    for keyword, phrase in _CLASS_KEYWORDS.items():
+        if keyword in lowered:
+            return phrase
+    return "someone"
 
 
 def _on_subscription_lost():
@@ -60,7 +75,9 @@ def discover_camera():
     raise RuntimeError("No ONVIF device found via WS-Discovery; set ONVIF_HOST manually")
 
 
-async def watch_motion():
+async def watch_motion(on_motion):
+    """Subscribe to the camera's events and await on_motion(description) for each
+    debounced motion event, where description is a phrase like "a person"/"someone"."""
     host, port = (ONVIF_HOST, ONVIF_PORT) if ONVIF_HOST else discover_camera()
     camera = ONVIFCamera(host, port, ONVIF_USER, ONVIF_PASS)
     await camera.update_xaddrs()
@@ -83,14 +100,6 @@ async def watch_motion():
                 data = message.Message._value_1.Data
                 simple_items = data.SimpleItem
                 items_repr = {item.Name: item.Value for item in simple_items}
-                element_items = getattr(data, "ElementItem", None) or []
-                elements_xml = [
-                    etree.tostring(item._value_1, pretty_print=True).decode()
-                    for item in element_items
-                ]
-                logger.debug(
-                    "Event topic=%s items=%s elements=%s", topic, items_repr, elements_xml
-                )
 
                 if OBJECT_CLASS_TOPIC in topic:
                     class_types = items_repr.get("ClassTypes", "")
@@ -108,14 +117,25 @@ async def watch_motion():
                     logger.info("Motion detected, debounced")
                     continue
                 last_announced = now
+                description = describe_object(last_object_class)
                 last_object_class = ""
-                logger.info("Motion detected, would announce now")
+                logger.info("Motion detected (%s)", description)
+                try:
+                    await on_motion(description)
+                except Exception:
+                    logger.exception("on_motion callback failed")
     finally:
         await manager.shutdown()
 
 
-if __name__ == "__main__":
-    try:
-        asyncio.run(watch_motion())
-    except KeyboardInterrupt:
-        logger.info("Stopped.")
+async def run_forever(on_motion, retry_delay_seconds=30):
+    """Run watch_motion() in a loop, restarting after a delay on any failure, so a
+    transient camera/network problem doesn't take down the whole watch task."""
+    while True:
+        try:
+            await watch_motion(on_motion)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Motion watch loop crashed, retrying in %ss", retry_delay_seconds)
+        await asyncio.sleep(retry_delay_seconds)

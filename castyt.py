@@ -56,6 +56,7 @@ class Player:
         self.query = None
         self.queue = []
         self.index = -1
+        self._announcing = False
 
     def _ensure_device(self):
         if self._device is None:
@@ -76,9 +77,28 @@ class Player:
             self._device = None
 
     def new_media_status(self, status):
-        if status.player_state == "IDLE" and status.idle_reason == "FINISHED":
-            with self._lock:
-                self._play_next_locked()
+        if status.player_state != "IDLE" or status.idle_reason != "FINISHED":
+            return
+        with self._lock:
+            if self._announcing:
+                self._announcing = False
+                if 0 <= self.index < len(self.queue):
+                    self._play_current_locked()
+                return
+            self._play_next_locked()
+
+    def announce(self, url, content_type="audio/mpeg"):
+        """Interrupt current playback (if any) to play a one-off announcement URL;
+        the current queue entry resumes from the start once it finishes."""
+        with self._lock:
+            self._announcing = True
+            device = self._ensure_device()
+            try:
+                device.controller.prep_app()
+                device.controller.play_media_url(url, content_type=content_type)
+            except Exception:
+                logger.exception("Failed to play announcement")
+                self._announcing = False
 
     def _play_current_locked(self):
         entry = self.queue[self.index]
@@ -145,6 +165,7 @@ class Player:
             self.query = None
             self.queue = []
             self.index = -1
+            self._announcing = False
             self._ensure_device().stop()
 
 
