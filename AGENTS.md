@@ -64,10 +64,13 @@ Mini and confirm audio actually plays.
     notified of unauthorized attempts; `ALLOWED_USER_IDS` (optional, comma-separated)
     additionally allow-lists other users. If `ALLOWED_USER_IDS` is empty, the bot is
     open to everyone.
-  - `post_init` starts `motion.run_forever(_on_motion)` as a background PTB task
-    (`app.create_task`, so it's tracked/cancelled on shutdown and exceptions get
-    logged) only if `motion.motion_detection_enabled()` is true — bots without a
-    camera configured are unaffected. `_on_motion` skips unclassified
+  - `post_init` starts `motion.run_forever(_on_motion)` as a background task via
+    plain `asyncio.create_task`, not `app.create_task` — `post_init` runs before
+    `Application.start()`, when `app.create_task` would warn and not track the
+    task for `stop()` to await. The task is kept in a module-level `_motion_task`
+    and cancelled/awaited from a `post_stop` hook instead, only if
+    `motion.motion_detection_enabled()` is true — bots without a camera
+    configured are unaffected. `_on_motion` skips unclassified
     ("unknown"-category) motion entirely — generic motion is usually uninteresting
     (wind, shadows, etc.), so only motion the camera actually classified (person/
     animal/vehicle) gets announced. Otherwise it looks up the wording via
@@ -90,6 +93,11 @@ Mini and confirm audio actually plays.
     unclassified event (wind, shadows) would suppress a real one for 30s.
   - `run_forever` wraps `watch_motion` in a retry loop so a transient camera or
     network failure can't crash the bot process.
+  - `watch_motion`'s `finally` cancels and awaits any still-pending
+    `_announce_after_delay` task before shutting down the subscription — those
+    tasks are independent children of the loop, not of `watch_motion`, so
+    without this an in-flight one could still fire an announcement after a
+    subscription failure or shutdown has already moved on to a new watcher.
   - `motion_detection_enabled()` gates the whole feature on `ONVIF_USER`/
     `ONVIF_PASS` being set — both are optional at the bot level.
   - `describe_object` returns a language-neutral category
@@ -138,3 +146,8 @@ Mini and confirm audio actually plays.
     drifts by a few seconds (network/buffering delay isn't accounted for) —
     accepted, since exact position would require reading the device's own
     playback clock.
+  - The resume itself goes through the same failure handling as normal queue
+    advancement: if `_play_current_locked` raises, `new_media_status` falls
+    back to `_try_play_locked` (resetting the cast device on `CastError` and
+    advancing the index first) instead of leaving playback stopped on a
+    transient cast failure.

@@ -127,7 +127,11 @@ async def _on_motion(category: str) -> None:
         logger.exception("Failed to announce motion event")
 
 
+_motion_task = None
+
+
 async def post_init(app: Application) -> None:
+    global _motion_task
     await app.bot.set_my_commands(
         [
             BotCommand("play", "Search YouTube and play on the Nest Mini"),
@@ -135,14 +139,31 @@ async def post_init(app: Application) -> None:
         ]
     )
     if motion.motion_detection_enabled():
-        app.create_task(motion.run_forever(_on_motion), name="motion-watch")
+        # post_init runs before Application.start(), so app.create_task() would
+        # warn and not track this task for stop() to await; track it ourselves.
+        _motion_task = asyncio.create_task(motion.run_forever(_on_motion))
         logger.info("Motion detection enabled, watching for camera events")
     else:
         logger.info("ONVIF_USER/ONVIF_PASS not set, motion detection disabled")
 
 
+async def post_stop(app: Application) -> None:
+    if _motion_task is not None:
+        _motion_task.cancel()
+        try:
+            await _motion_task
+        except asyncio.CancelledError:
+            pass
+
+
 def main() -> None:
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(post_init)
+        .post_stop(post_stop)
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("play", play))
     app.add_handler(CommandHandler("stop", stop))

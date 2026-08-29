@@ -85,7 +85,17 @@ class Player:
             if self._announcing:
                 self._announcing = False
                 if 0 <= self.index < len(self.queue):
-                    self._play_current_locked(current_time=self._interrupted_at_seconds)
+                    try:
+                        self._play_current_locked(current_time=self._interrupted_at_seconds)
+                        return
+                    except CastError:
+                        logger.exception("Failed to resume %r after announcement", self.queue[self.index].get("title"))
+                        self._reset_cast_device_locked()
+                        self.index += 1
+                    except Exception:
+                        logger.exception("Failed to resume %r after announcement", self.queue[self.index].get("title"))
+                        self.index += 1
+                    self._try_play_locked()
                 return
             self._play_next_locked()
 

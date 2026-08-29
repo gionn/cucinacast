@@ -141,6 +141,10 @@ async def watch_motion(on_motion):
                 pending_tasks.add(task)
                 task.add_done_callback(pending_tasks.discard)
     finally:
+        for task in pending_tasks:
+            task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
         await manager.shutdown()
 
 
