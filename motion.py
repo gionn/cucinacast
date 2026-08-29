@@ -127,6 +127,8 @@ async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS):
     camera = await _connect_camera()
     media = await camera.create_media_service()
     profiles = await media.GetProfiles()
+    if not profiles:
+        raise RuntimeError("Camera returned no ONVIF media profiles")
     profile = next((p for p in profiles if "sub" in p.token.lower()), profiles[-1])
 
     uri_resp = await media.GetStreamUri(

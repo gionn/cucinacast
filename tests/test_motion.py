@@ -11,11 +11,11 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _fake_camera(stream_uri="rtsp://cam/stream"):
+def _fake_camera(stream_uri="rtsp://cam/stream", profiles=None):
+    if profiles is None:
+        profiles = [SimpleNamespace(token="profile-sub")]  # noqa: S106
     media = Mock()
-    media.GetProfiles = AsyncMock(
-        return_value=[SimpleNamespace(token="profile-sub")]  # noqa: S106
-    )
+    media.GetProfiles = AsyncMock(return_value=profiles)
     media.GetStreamUri = AsyncMock(return_value=SimpleNamespace(Uri=stream_uri))
     camera = Mock()
     camera.create_media_service = AsyncMock(return_value=media)
@@ -122,10 +122,20 @@ def test_capture_clip_returns_path_and_encodes_credentials(monkeypatch, tmp_path
     assert "p%40ss%3Aword" in stream_url
 
 
-def test_capture_clip_deletes_file_and_redacts_password_on_failure(monkeypatch, tmp_path):
-    proc = _fake_proc(
-        returncode=1, stderr=b"could not connect to rtsp://admin:p@ss:word@cam/stream"
+def test_capture_clip_raises_clear_error_on_empty_profiles(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONVIF_USER", "admin")
+    monkeypatch.setenv("ONVIF_PASS", "secret")
+    monkeypatch.setattr(
+        motion, "_connect_camera", AsyncMock(return_value=_fake_camera(profiles=[]))
     )
+    monkeypatch.setattr(motion, "_clip_dir_path", lambda: str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="no ONVIF media profiles"):
+        _run(motion.capture_clip(duration_seconds=1))
+
+
+def test_capture_clip_deletes_file_and_redacts_password_on_failure(monkeypatch, tmp_path):
+    proc = _fake_proc(returncode=1, stderr=b"auth rejected for password p@ss:word")
     _patch_capture_deps(monkeypatch, tmp_path, proc)
 
     with pytest.raises(RuntimeError) as exc_info:
