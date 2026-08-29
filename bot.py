@@ -31,12 +31,17 @@ ALLOWED_USER_IDS = {
 }
 OWNER_USER_ID = int(os.environ["OWNER_USER_ID"])
 
+ANNOUNCE_MAX_LENGTH = 200
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "CucinaCast: search YouTube and play it on the Nest Mini speaker.\n\n"
         "/play <query> - search YouTube and play the top result "
-        "(auto-advances through more results until you /stop)\n"
+        "(auto-advances through more results until you /stop); "
+        "if you leave out the query, I'll ask for it\n"
+        "/announce <text> - speak a custom message on the Nest Mini; "
+        "if you leave out the text, I'll ask for it\n"
         "/stop - stop playback\n"
         "/whoami - show your Telegram user id\n\n"
         "You can also just send a plain text message instead of /play."
@@ -65,18 +70,29 @@ async def _deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+_awaiting_play_text = set()
+_awaiting_announce_text = set()
+
+
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update):
         await _deny(update, context)
         return
 
-    query = " ".join(context.args) if context.args else update.message.text
+    user_id = update.effective_user.id
+    _awaiting_play_text.discard(user_id)
+    _awaiting_announce_text.discard(user_id)
+
+    query = " ".join(context.args) if context.args else None
     if not query:
-        await update.message.reply_text(
-            "Send a song/video name to play, e.g. /play bohemian rhapsody"
-        )
+        _awaiting_play_text.add(user_id)
+        await update.message.reply_text("What do you want to play?")
         return
 
+    await _do_play(update, context, query)
+
+
+async def _do_play(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
     await update.message.reply_text(f"Searching for: {query}...")
     try:
         title, url = await asyncio.to_thread(player.play_search, query)
@@ -88,10 +104,71 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"Now playing: {title}\n{url}")
 
 
+async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        await _deny(update, context)
+        return
+
+    user_id = update.effective_user.id
+    _awaiting_play_text.discard(user_id)
+    _awaiting_announce_text.discard(user_id)
+
+    text = " ".join(context.args) if context.args else None
+    if not text:
+        _awaiting_announce_text.add(user_id)
+        await update.message.reply_text("What should I announce?")
+        return
+
+    await _do_announce(update, context, text)
+
+
+async def _do_announce(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    text = text.strip()
+    if not text:
+        await update.message.reply_text("Nothing to announce.")
+        return
+    if len(text) > ANNOUNCE_MAX_LENGTH:
+        await update.message.reply_text(
+            f"That's too long to announce ({len(text)} chars, max {ANNOUNCE_MAX_LENGTH})."
+        )
+        return
+
+    try:
+        url = await asyncio.to_thread(synthesize_and_serve, text, phrases.tts_lang())
+        await asyncio.to_thread(player.announce, url)
+    except Exception as exc:
+        logger.exception("Failed to announce %r", text)
+        await update.message.reply_text(f"Couldn't announce that: {exc}")
+        return
+
+    await update.message.reply_text(f"Announcing: {text}")
+
+
+async def _route_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        await _deny(update, context)
+        return
+
+    user_id = update.effective_user.id
+    if user_id in _awaiting_announce_text:
+        _awaiting_announce_text.discard(user_id)
+        await _do_announce(update, context, update.message.text)
+        return
+    if user_id in _awaiting_play_text:
+        _awaiting_play_text.discard(user_id)
+        await _do_play(update, context, update.message.text)
+        return
+    await _do_play(update, context, update.message.text)
+
+
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update):
         await _deny(update, context)
         return
+
+    user_id = update.effective_user.id
+    _awaiting_play_text.discard(user_id)
+    _awaiting_announce_text.discard(user_id)
 
     try:
         await asyncio.to_thread(player.stop)
@@ -136,7 +213,8 @@ async def post_init(app: Application) -> None:
     global _motion_task
     await app.bot.set_my_commands(
         [
-            BotCommand("play", "Search YouTube and play on the Nest Mini"),
+            BotCommand("play", "Search YouTube and play"),
+            BotCommand("announce", "Speak a custom message"),
             BotCommand("stop", "Stop playback"),
         ]
     )
@@ -168,9 +246,10 @@ def main() -> None:
     )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("play", play))
+    app.add_handler(CommandHandler("announce", announce))
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("whoami", whoami))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _route_text))
     app.add_error_handler(error_handler)
     app.run_polling()
     if conflict_detected:
