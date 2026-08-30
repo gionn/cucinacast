@@ -20,6 +20,13 @@ PAIR_TIMEOUT_SECONDS = 60
 _HCI_DEVICE_RE = re.compile(r"^\s*hci\d+\s+([0-9A-F:]+)$", re.MULTILINE)
 _NEW_DEVICE_RE = re.compile(r"\[NEW\] Device ([0-9A-F:]+)(?:\s+(.*))?$", re.MULTILINE)
 _PASSKEY_RE = re.compile(r"(?:Confirm passkey|Enter passkey) (\d+)")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _strip_ansi(text):
+    """Strip ANSI SGR color codes and the SOH/STX control bytes bluetoothctl
+    wraps around colored tokens, so the plain-text regexes below match."""
+    return _ANSI_RE.sub("", text.replace("\x01", "").replace("\x02", ""))
 
 
 def bluetooth_available():
@@ -72,9 +79,11 @@ async def _run_async(cmd, timeout=PROBE_TIMEOUT_SECONDS):
 async def discover_devices(timeout_seconds=DISCOVERY_TIMEOUT_SECONDS):
     """Run a temporary bluetoothctl discovery scan and return discovered devices
     as a list of {"mac", "name"} dicts."""
-    out = await _run_async(
-        ("bluetoothctl", "--timeout", str(timeout_seconds), "scan", "on"),
-        timeout=timeout_seconds + 10,
+    out = _strip_ansi(
+        await _run_async(
+            ("bluetoothctl", "--timeout", str(timeout_seconds), "scan", "on"),
+            timeout=timeout_seconds + 10,
+        )
     )
     devices = []
     for match in _NEW_DEVICE_RE.finditer(out):
@@ -114,7 +123,8 @@ async def _pair_interactive(mac, on_prompt):
             line = await _read_line(proc, timeout=5)
             if line is None:
                 break
-            logger.info("bluetoothctl: %s", line.strip())
+            line = _strip_ansi(line.decode(errors="replace")).strip()
+            logger.info("bluetoothctl: %s", line)
             if "Pairing successful" in line:
                 paired = True
                 break

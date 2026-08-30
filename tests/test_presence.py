@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -43,6 +44,27 @@ def test_bluetooth_available_warns_with_setup_advice_on_error(monkeypatch, caplo
     with caplog.at_level("WARNING", logger="presence"):
         assert presence.bluetooth_available() is False
     assert any("bluetooth" in r.message and "usermod" in r.message for r in caplog.records)
+
+
+def test_strip_ansi_removes_color_codes_and_control_bytes():
+    raw = "[\x01\x1b[0;92m\x02NEW\x01\x1b[0m\x02] Device B0:4A:B4:B0:A0:27 moto g84"
+    assert presence._strip_ansi(raw) == "[NEW] Device B0:4A:B4:B0:A0:27 moto g84"
+
+
+def test_discover_devices_parses_ansi_colored_output(monkeypatch):
+    raw = (
+        "Discovery started\n"
+        "[\x01\x1b[0;92m\x02NEW\x01\x1b[0m\x02] Device 49:F1:E2:E9:BE:0A 49-F1-E2-E9-BE-0A\n"
+        "[\x01\x1b[0;92m\x02NEW\x01\x1b[0m\x02] Device B0:4A:B4:B0:A0:27 moto g84\n"
+    )
+    monkeypatch.setattr(presence, "_run_async", AsyncMock(return_value=raw))
+
+    devices = _run(presence.discover_devices())
+
+    assert devices == [
+        {"mac": "49:F1:E2:E9:BE:0A", "name": "49-F1-E2-E9-BE-0A"},
+        {"mac": "B0:4A:B4:B0:A0:27", "name": "moto g84"},
+    ]
 
 
 def test_apply_miss_increments_count():
