@@ -232,7 +232,8 @@ def _probe(mac):
             pass
         if out.strip():
             return True
-        time.sleep(PROBE_RETRY_DELAY_SECONDS)
+        if attempt < PROBE_ATTEMPTS - 1:
+            time.sleep(PROBE_RETRY_DELAY_SECONDS)
     return False
 
 

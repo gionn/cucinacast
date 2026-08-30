@@ -198,7 +198,7 @@ async def adddevice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             mac = storage_bluetooth.normalize_mac(args[0])
         except ValueError as exc:
-            await update.message.reply_text(f"Invalid MAC address: {exc}")
+            await update.message.reply_text(str(exc))
             return
         nickname = " ".join(args[1:]).strip()
         if nickname:
@@ -357,7 +357,7 @@ async def athome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         for device in home_devices:
             lines.append(f"  • {device['mac']}: home")
         for device in away_devices:
-            if device["last_seen"]:
+            if device["last_seen"] is not None:
                 lines.append(
                     f"  • {device['mac']}: away (last seen "
                     f"{_format_last_seen(device['last_seen'])})"
@@ -380,8 +380,16 @@ async def rmdevice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not query:
         await update.message.reply_text("Usage: /rmdevice <nickname or mac>")
         return
+    try:
+        normalized = storage_bluetooth.normalize_mac(query)
+    except ValueError:
+        normalized = None
     for device in storage_bluetooth.list_devices():
-        if device["nickname"].lower() == query or device["mac"].lower() == query:
+        if (
+            device["nickname"].lower() == query
+            or device["mac"] == normalized
+            or device["mac"].lower() == query
+        ):
             storage_bluetooth.remove_device(device["mac"])
             await update.message.reply_text(f"Removed {device['nickname']} ({device['mac']}).")
             return

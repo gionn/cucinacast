@@ -267,7 +267,21 @@ def test_adddevice_with_mac_only_asks_for_nickname(monkeypatch):
     assert bot._awaiting_device_nickname[1]["mac"] == "C2:06:19:03:24:4D"
 
 
-def test_adddevice_rejects_invalid_mac(monkeypatch):
+def test_athome_shows_zero_last_seen_as_seen(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
+    storage_bluetooth.set_device_state("AA:BB:CC:DD:EE:FF", False, 0, 0.0)
+    update = _update()
+    context = _context()
+
+    _run(bot.athome(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "away (last seen" in reply
+    assert "never seen" not in reply
+
+
+def test_adddevice_rejects_invalid_mac_without_double_prefix(monkeypatch):
     monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
     update = _update()
     context = _context(args=["not-a-mac", "gionn"])
@@ -275,7 +289,7 @@ def test_adddevice_rejects_invalid_mac(monkeypatch):
     _run(bot.adddevice(update, context))
 
     reply = update.message.reply_text.call_args.args[0]
-    assert "Invalid MAC" in reply
+    assert reply.count("Invalid MAC") == 1
     assert storage_bluetooth.list_devices() == []
 
 
@@ -510,6 +524,18 @@ def test_rmdevice_removes_by_mac(monkeypatch):
     storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
     update = _update()
     context = _context(args=["aa:bb:cc:dd:ee:ff"])
+
+    _run(bot.rmdevice(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "Removed Marta (AA:BB:CC:DD:EE:FF)" in reply
+
+
+def test_rmdevice_removes_by_dash_separated_mac(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
+    update = _update()
+    context = _context(args=["aa-bb-cc-dd-ee-ff"])
 
     _run(bot.rmdevice(update, context))
 
