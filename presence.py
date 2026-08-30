@@ -118,6 +118,8 @@ async def _pair_interactive(mac, on_prompt):
     start = time.monotonic()
     paired = False
     outcome = "unknown"
+    prompted = False
+    passkey = None
     try:
         await _feed(proc, "agent on")
         await _feed(proc, "default-agent")
@@ -135,7 +137,7 @@ async def _pair_interactive(mac, on_prompt):
                 break
             line = _strip_ansi(line.decode(errors="replace")).strip()
             logger.info("bluetoothctl: %s", " ".join(line.split()))
-            if "Pairing successful" in line:
+            if "Pairing successful" in line or "Bonded: yes" in line:
                 paired = True
                 outcome = "success"
                 break
@@ -144,7 +146,13 @@ async def _pair_interactive(mac, on_prompt):
                 break
             passkey_match = _PASSKEY_RE.search(line)
             if passkey_match:
+                # bluetoothctl re-prints the pending prompt on every redraw
+                # line (interleaved with [DEL]/[CHG] events, plus the echo of
+                # our reply), so only act on the first occurrence per passkey.
+                if prompted and passkey_match.group(1) == passkey:
+                    continue
                 passkey = passkey_match.group(1)
+                prompted = True
                 try:
                     reply = await asyncio.wait_for(
                         on_prompt(passkey), timeout=PASSKEY_CONFIRM_TIMEOUT_SECONDS

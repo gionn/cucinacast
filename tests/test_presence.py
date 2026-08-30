@@ -329,6 +329,45 @@ def test_pair_confirms_passkey_then_succeeds(monkeypatch):
     assert replies == ["123456"]
 
 
+def test_pair_succeeds_on_bonded_without_pairing_success_line(monkeypatch):
+    replies = []
+
+    async def on_prompt(passkey):
+        replies.append(passkey)
+        return "yes"
+
+    proc, (paired, outcome) = _run_pairing(
+        monkeypatch,
+        [b"Confirm passkey 123456\n", b"[CHG] Device AA:BB:CC:DD:EE:FF Bonded: yes\n"],
+        on_prompt=on_prompt,
+    )
+    assert paired is True
+    assert outcome == "success"
+    assert replies == ["123456"]
+
+
+def test_pair_ignores_redrawn_passkey_prompts(monkeypatch):
+    prompts = []
+
+    async def on_prompt(passkey):
+        prompts.append(passkey)
+        return "yes"
+
+    proc, (paired, outcome) = _run_pairing(
+        monkeypatch,
+        [
+            b"[agent] Confirm passkey 719451 (yes/no): [DEL] Device 65:0E:66:FC:8B:5B\n",
+            b"[agent] Confirm passkey 719451 (yes/no): [DEL] Device F4:CE:23:08:35:FD debyzen\n",
+            b"[agent] Confirm passkey 719451 (yes/no): yes\n",
+            b"[CHG] Device AA:BB:CC:DD:EE:FF Bonded: yes\n",
+        ],
+        on_prompt=on_prompt,
+    )
+    assert paired is True
+    assert outcome == "success"
+    assert prompts == ["719451"]
+
+
 def test_pair_logs_collapse_bluetoothctl_whitespace(monkeypatch, caplog):
     _patch_proc(monkeypatch, [b"[bluetooth]#                Agent registered\n"])
     with caplog.at_level("INFO", logger="presence"):
