@@ -26,10 +26,11 @@ python3 -m venv .venv
 ./.venv/bin/python tts.py "some announcement text"
 
 # syntax-check after edits
-./.venv/bin/python -m py_compile bot.py castyt.py motion.py announce.py tts.py phrases.py storage.py
+./.venv/bin/python -m py_compile bot.py castyt.py motion.py announce.py tts.py phrases.py storage.py storage_bluetooth.py presence.py
 
-# run the test suite (unit tests for search ranking/caching and play-history
-# storage logic; everything else is still verified manually, see below)
+# run the test suite (unit tests for search ranking/caching, play-history and
+# bluetooth-presence storage logic, and the presence state machine; everything
+# else is still verified manually, see below)
 ./.venv/bin/python -m pytest
 
 # install/refresh as a systemd service (creates .venv, installs deps every run)
@@ -44,11 +45,13 @@ Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Option
 `ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`, `LOG_LEVEL`,
 `HTTPX_LOG_LEVEL`.
 
-`pytest` covers the search-ranking/caching logic in `castyt.py` and the storage
-logic in `storage.py` (`tests/`), with the actual `yt-dlp`/sqlite calls
-mocked/isolated. Everything that touches the real Chromecast, camera, or Telegram
-API still has no automated coverage — verify those manually by running the bot
-against the real Nest Mini and confirming audio actually plays.
+`pytest` covers the search-ranking/caching logic in `castyt.py`, the storage
+logic in `storage.py`/`storage_bluetooth.py`, and the presence state machine in
+`presence.py` (`tests/`), with the actual `yt-dlp`/sqlite calls mocked/isolated
+and the `hcitool`/`bluetoothctl` subprocesses never invoked. Everything that
+touches the real Chromecast, camera, Bluetooth hardware, or Telegram API still
+has no automated coverage — verify those manually by running the bot against
+the real Nest Mini and confirming audio actually plays.
 
 ## Architecture
 
@@ -156,6 +159,33 @@ against the real Nest Mini and confirming audio actually plays.
     ("person"/"animal"/"vehicle"/"unknown"), not wording — localization into an
     actual sentence is `phrases.py`'s job, keeping `motion.py` free of any
     TTS/language concern.
+- `presence.py` — Bluetooth presence tracking (who's home), no Telegram/TTS/
+  casting dependency (mirrors `motion.py`'s separation). Gated on a working
+  adapter via `bluetooth_available()` (`hcitool dev` seeing `hci0`), which logs
+  a startup warning with setup advice if the adapter can't be queried.
+  - Device lookup uses `hcitool name <mac>` (paging), which works for any
+    powered-on phone regardless of pairing/discoverability — unlike a discovery
+    scan, which only sees discoverable devices. `hcitool`/`bluetoothctl` run
+    unprivileged: the HCI socket is accessible once the user is in the
+    `bluetooth` group, and `bluetoothctl` talks over the BlueZ DBus API.
+  - `run_forever(on_transition)` polls every `POLL_INTERVAL_SECONDS` (10 min)
+    via `check_presence`, which probes each registered device through
+    `asyncio.to_thread` (blocking subprocess I/O) and applies the 3-strike
+    rule: a device flips home→away only after `MISS_THRESHOLD` consecutive
+    misses, so a single probe failure (bluetooth hiccup) can't flap the state.
+    Miss counts persist through `storage_bluetooth`, so a bot restart doesn't
+    reset the countdown. Transitions (home/away flips) are collapsed to at most
+    one per nickname per poll (`_collapse_transitions`, preferring home when a
+    nickname has devices on both sides) and go to `on_transition(transition)`,
+    which `bot.py` uses to notify the owner on Telegram. Restarts on failure
+    like `motion.run_forever`.
+  - `discover_devices()` runs a temporary `bluetoothctl scan on` and parses the
+    `[NEW] Device` lines; `pair_device(mac, on_prompt)` drives an interactive
+    `bluetoothctl` session (agent on / default-agent / pair / trust) and calls
+    `on_prompt(passkey)` when bluetoothctl asks to confirm a passkey, so
+    `bot.py` can relay the confirmation to the owner on Telegram and feed the
+    reply back. Returns success/failure — pairing is only ever needed during
+    `/adddevice`, never for presence probing.
 - `phrases.py` — localized wording for doorbell announcements. `TTS_LANG` (env,
   default `en`) selects the language; `announcement_text(category)` maps a
   `motion.describe_object` category to a sentence in that language, falling back
@@ -202,6 +232,11 @@ against the real Nest Mini and confirming audio actually plays.
   - Each function opens and closes its own short-lived `sqlite3.connect`; no
     long-held connection or extra locking, since `Player` already serializes its
     own calls into this module through `self._lock`.
+- `storage_bluetooth.py` — the `devices` table (registered MACs, nicknames, and
+  the persistent home/away + miss-count state) in its own module, same
+  short-lived-connection pattern as `storage.py`. `presence.py` is the only
+  consumer. Kept separate so the play-history/cache module doesn't accumulate
+  unrelated concerns.
 - `Player.announce(url)` in `castyt.py` interrupts current playback to play an
   arbitrary announcement URL, tracked via an `_announcing` flag on `Player`. The
   `new_media_status` FINISHED callback branches on this flag: after an
