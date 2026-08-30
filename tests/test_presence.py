@@ -35,6 +35,16 @@ def test_bluetooth_available_false_on_hcitool_error(monkeypatch):
     assert presence.bluetooth_available() is False
 
 
+def test_bluetooth_available_warns_with_setup_advice_on_error(monkeypatch, caplog):
+    def boom(cmd, timeout=15):
+        raise RuntimeError("permission denied")
+
+    monkeypatch.setattr(presence, "_run_checked", boom)
+    with caplog.at_level("WARNING", logger="presence"):
+        assert presence.bluetooth_available() is False
+    assert any("bluetooth" in r.message and "usermod" in r.message for r in caplog.records)
+
+
 def test_apply_miss_increments_count():
     home, miss_count, flipped = presence._apply_miss({"home": True, "miss_count": 0})
     assert (home, miss_count, flipped) == (True, 1, False)
@@ -118,26 +128,13 @@ def test_probe_returns_true_for_named_device(monkeypatch):
     assert presence._probe("AA:BB:CC:DD:EE:FF") is True
 
 
-def test_probe_prepends_sudo_by_default(monkeypatch):
+def test_probe_runs_hcitool_without_sudo(monkeypatch):
     captured = {}
 
     def capture(cmd, timeout=15):
         captured["cmd"] = cmd
         return "Pixel 9"
 
-    monkeypatch.setattr(presence, "_run_checked", capture)
-    presence._probe("AA:BB:CC:DD:EE:FF")
-    assert captured["cmd"] == ("sudo", "hcitool", "name", "AA:BB:CC:DD:EE:FF")
-
-
-def test_probe_drops_sudo_with_presence_no_sudo(monkeypatch):
-    captured = {}
-
-    def capture(cmd, timeout=15):
-        captured["cmd"] = cmd
-        return "Pixel 9"
-
-    monkeypatch.setattr(presence, "SUDO_PREFIX", ())
     monkeypatch.setattr(presence, "_run_checked", capture)
     presence._probe("AA:BB:CC:DD:EE:FF")
     assert captured["cmd"] == ("hcitool", "name", "AA:BB:CC:DD:EE:FF")

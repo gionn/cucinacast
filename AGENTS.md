@@ -43,7 +43,7 @@ systemd service only need `requirements.txt`.
 Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Optional:
 `NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
 `ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`, `LOG_LEVEL`,
-`HTTPX_LOG_LEVEL`, `PRESENCE_NO_SUDO`.
+`HTTPX_LOG_LEVEL`.
 
 `pytest` covers the search-ranking/caching logic in `castyt.py`, the storage
 logic in `storage.py`/`storage_bluetooth.py`, and the presence state machine in
@@ -161,12 +161,13 @@ the real Nest Mini and confirming audio actually plays.
     TTS/language concern.
 - `presence.py` — Bluetooth presence tracking (who's home), no Telegram/TTS/
   casting dependency (mirrors `motion.py`'s separation). Gated on a working
-  adapter via `bluetooth_available()` (`sudo hcitool dev` seeing `hci0`).
+  adapter via `bluetooth_available()` (`hcitool dev` seeing `hci0`), which logs
+  a startup warning with setup advice if the adapter can't be queried.
   - Device lookup uses `hcitool name <mac>` (paging), which works for any
     powered-on phone regardless of pairing/discoverability — unlike a discovery
-    scan, which only sees discoverable devices. All `hcitool`/`bluetoothctl`
-    subprocesses need `sudo` (the service user has passwordless sudo); a
-    `PRESENCE_NO_SUDO` env var drops the `sudo` prefix for test environments.
+    scan, which only sees discoverable devices. `hcitool`/`bluetoothctl` run
+    unprivileged: the HCI socket is accessible once the user is in the
+    `bluetooth` group, and `bluetoothctl` talks over the BlueZ DBus API.
   - `run_forever(on_transition)` polls every `POLL_INTERVAL_SECONDS` (10 min)
     via `check_presence`, which probes each registered device through
     `asyncio.to_thread` (blocking subprocess I/O) and applies the 3-strike

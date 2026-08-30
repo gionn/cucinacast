@@ -3,7 +3,6 @@ Telegram/TTS/casting dependency."""
 
 import asyncio
 import logging
-import os
 import re
 import time
 from contextlib import suppress
@@ -22,16 +21,20 @@ _HCI_DEVICE_RE = re.compile(r"^\s*hci\d+\s+([0-9A-F:]+)$", re.MULTILINE)
 _NEW_DEVICE_RE = re.compile(r"\[NEW\] Device ([0-9A-F:]+)(?:\s+(.*))?$", re.MULTILINE)
 _PASSKEY_RE = re.compile(r"(?:Confirm passkey|Enter passkey) (\d+)")
 
-SUDO_PREFIX = () if os.environ.get("PRESENCE_NO_SUDO") else ("sudo",)
-
 
 def bluetooth_available():
-    """True if the local adapter is present (hcitool dev lists hci0). sudo is
-    required for hcitool/bluetoothctl; the service user has passwordless sudo."""
+    """True if a usable adapter is present. hcitool runs unprivileged: on
+    Debian the HCI socket is accessible once the user is in the 'bluetooth'
+    group, and bluetoothctl talks over the BlueZ DBus API."""
     try:
-        out = _run_checked((*SUDO_PREFIX, "hcitool", "dev"))
-    except Exception:
-        logger.exception("Failed to check bluetooth adapter")
+        out = _run_checked(("hcitool", "dev"))
+    except Exception as exc:
+        logger.warning(
+            "Couldn't query the Bluetooth adapter: %s. If this host has "
+            "Bluetooth, make sure hcitool is installed and the service user is "
+            "in the 'bluetooth' group (sudo usermod -aG bluetooth <user>).",
+            exc,
+        )
         return False
     return bool(_HCI_DEVICE_RE.search(out))
 
@@ -70,7 +73,7 @@ async def discover_devices(timeout_seconds=DISCOVERY_TIMEOUT_SECONDS):
     """Run a temporary bluetoothctl discovery scan and return discovered devices
     as a list of {"mac", "name"} dicts."""
     out = await _run_async(
-        (*SUDO_PREFIX, "bluetoothctl", "--timeout", str(timeout_seconds), "scan", "on"),
+        ("bluetoothctl", "--timeout", str(timeout_seconds), "scan", "on"),
         timeout=timeout_seconds + 10,
     )
     devices = []
@@ -91,7 +94,7 @@ async def _pair_interactive(mac, on_prompt):
     """Pair with a device using an interactive bluetoothctl session. on_prompt
     is called with a passkey/confirm prompt and must return a reply (or None to
     abort); returns True on successful pairing, False on failure/abort."""
-    cmd = (*SUDO_PREFIX, "bluetoothctl")
+    cmd = ("bluetoothctl",)
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.PIPE,
@@ -162,7 +165,7 @@ async def pair_device(mac, on_prompt):
     if not success:
         return False, "Pairing failed or was aborted"
     try:
-        await _run_async((*SUDO_PREFIX, "bluetoothctl", "trust", mac), timeout=10)
+        await _run_async(("bluetoothctl", "trust", mac), timeout=10)
     except Exception:
         logger.exception("Failed to trust %s", mac)
     return True, "Paired and trusted"
@@ -172,7 +175,7 @@ def _probe(mac):
     """Probe a single device via hcitool name (paging). Works for any powered-on
     phone whether or not it's paired/discoverable. Returns True if present."""
     try:
-        out = _run_checked((*SUDO_PREFIX, "hcitool", "name", mac), timeout=PROBE_TIMEOUT_SECONDS)
+        out = _run_checked(("hcitool", "name", mac), timeout=PROBE_TIMEOUT_SECONDS)
     except Exception:
         return False
     return out.strip() != ""

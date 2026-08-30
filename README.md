@@ -81,10 +81,6 @@ feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
   in which motion-triggered announcements are suppressed (default `22`/`8`, i.e.
   10pm-8am). Only affects automatic doorbell announcements from motion detection;
   the manual `/announce` command always works.
-- `PRESENCE_NO_SUDO` — drop the `sudo` prefix from the `hcitool`/`bluetoothctl`
-  commands used for Bluetooth presence tracking. Only needed in environments where
-  the service already runs with sufficient privileges (e.g. as root in a container);
-  normally presence requires passwordless sudo for the service user.
 
 ## Run the bot
 
@@ -169,10 +165,11 @@ detection itself is unaffected either way.
 ## Bluetooth presence
 
 If the machine running the bot has a Bluetooth adapter, the bot can track who's home
-by monitoring registered phones. This needs `hcitool` and `bluetoothctl` installed
-and passwordless sudo for the service user (the same user the systemd service runs
-as); if your machine lacks a working adapter, the feature is silently disabled and
-`/athome`/`/adddevice`/`/rmdevice` report that no devices are registered.
+by monitoring registered phones. This needs `hcitool` and `bluetoothctl` installed and
+the service user in the `bluetooth` group (`sudo usermod -aG bluetooth <user>`); if
+your machine lacks a working adapter (or the group isn't set up), the feature is
+disabled with a warning at startup and `/athome`/`/adddevice`/`/rmdevice` report that
+no devices are registered.
 
 Register a device with `/adddevice` — give it a nickname, then pick your phone from
 the 15-second discovery scan. The bot pairs (you confirm any passkey shown on the
