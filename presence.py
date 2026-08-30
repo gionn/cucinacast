@@ -19,6 +19,7 @@ PAIR_TIMEOUT_SECONDS = 60
 
 _HCI_DEVICE_RE = re.compile(r"^\s*hci\d+\s+([0-9A-F:]+)$", re.MULTILINE)
 _NEW_DEVICE_RE = re.compile(r"\[NEW\] Device ([0-9A-F:]+)(?:\s+(.*))?$", re.MULTILINE)
+_DEVICE_NAME_RE = re.compile(r"\[CHG\] Device ([0-9A-F:]+) (?:Name|Alias): (.+)$", re.MULTILINE)
 _PASSKEY_RE = re.compile(r"(?:Confirm passkey|Enter passkey) (\d+)")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
@@ -85,18 +86,21 @@ async def discover_devices(timeout_seconds=DISCOVERY_TIMEOUT_SECONDS):
             timeout=timeout_seconds + 10,
         )
     )
-    devices = []
+    devices = {}
     for match in _NEW_DEVICE_RE.finditer(out):
         mac = match.group(1).upper()
-        name = match.group(2) or ""
-        devices.append({"mac": mac, "name": name})
-    seen = set()
-    unique = []
-    for device in devices:
-        if device["mac"] not in seen:
-            seen.add(device["mac"])
-            unique.append(device)
-    return unique
+        name = (match.group(2) or "").strip()
+        # bluetoothctl echoes the MAC (dash-separated) as the name until the
+        # device reports one; treat that as nameless.
+        if name.replace("-", ":").upper() == mac:
+            name = ""
+        devices.setdefault(mac, {"mac": mac, "name": name})
+    for match in _DEVICE_NAME_RE.finditer(out):
+        mac = match.group(1).upper()
+        device = devices.setdefault(mac, {"mac": mac, "name": ""})
+        if match.group(2):
+            device["name"] = match.group(2).strip()
+    return list(devices.values())
 
 
 async def _pair_interactive(mac, on_prompt):

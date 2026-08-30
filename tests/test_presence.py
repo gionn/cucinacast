@@ -62,9 +62,23 @@ def test_discover_devices_parses_ansi_colored_output(monkeypatch):
     devices = _run(presence.discover_devices())
 
     assert devices == [
-        {"mac": "49:F1:E2:E9:BE:0A", "name": "49-F1-E2-E9-BE-0A"},
+        {"mac": "49:F1:E2:E9:BE:0A", "name": ""},
         {"mac": "B0:4A:B4:B0:A0:27", "name": "moto g84"},
     ]
+
+
+def test_discover_devices_uses_late_reported_name(monkeypatch):
+    raw = (
+        "Discovery started\n"
+        "[NEW] Device B0:4A:B4:B0:A0:27 B0-4A-B4-B0-A0-27\n"
+        "[CHG] Device B0:4A:B4:B0:A0:27 Name: moto g84\n"
+        "[CHG] Device B0:4A:B4:B0:A0:27 RSSI: -70\n"
+    )
+    monkeypatch.setattr(presence, "_run_async", AsyncMock(return_value=raw))
+
+    devices = _run(presence.discover_devices())
+
+    assert devices == [{"mac": "B0:4A:B4:B0:A0:27", "name": "moto g84"}]
 
 
 def test_apply_miss_increments_count():
