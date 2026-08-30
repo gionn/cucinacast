@@ -80,8 +80,8 @@ async def _deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 _awaiting_play_text = set()
 _awaiting_announce_text = set()
-_awaiting_device_nickname = set()
 _awaiting_device_pick = {}
+_awaiting_device_nickname = {}
 _pair_sessions = {}
 
 
@@ -161,12 +161,11 @@ async def _route_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     user_id = update.effective_user.id
-    if user_id in _awaiting_device_nickname:
-        _awaiting_device_nickname.discard(user_id)
-        await _scan_for_nickname(update, context, update.message.text)
-        return
     if user_id in _awaiting_device_pick:
         await _finish_device_pick(update, context)
+        return
+    if user_id in _awaiting_device_nickname:
+        await _save_nickname(update, context)
         return
     if user_id in _pair_sessions:
         await _answer_pair_confirm(update, context)
@@ -191,25 +190,9 @@ async def adddevice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _awaiting_play_text.discard(user_id)
     _awaiting_announce_text.discard(user_id)
     _awaiting_device_pick.pop(user_id, None)
+    _awaiting_device_nickname.pop(user_id, None)
     _pair_sessions.pop(user_id, None)
 
-    nickname = " ".join(context.args).strip()
-    if nickname:
-        await _scan_for_nickname(update, context, nickname)
-        return
-    _awaiting_device_nickname.add(user_id)
-    await update.message.reply_text("What nickname should I use for this device?")
-
-
-async def _scan_for_nickname(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, nickname: str
-) -> None:
-    nickname = nickname.strip()
-    if not nickname:
-        await update.message.reply_text(
-            "The nickname can't be empty. Send /adddevice to try again."
-        )
-        return
     await update.message.reply_text("Scanning for nearby Bluetooth devices for 15 seconds...")
     try:
         devices = await presence.discover_devices()
@@ -222,13 +205,11 @@ async def _scan_for_nickname(
     if not candidates:
         await update.message.reply_text(
             "No new devices found. Make sure the phone's Bluetooth is on and it's "
-            "discoverable, then try /adddevice again."
+            "discoverable (e.g. Bluetooth settings open with 'Pair new device'), "
+            "then try /adddevice again."
         )
         return
-    _awaiting_device_pick[update.effective_user.id] = {
-        "nickname": nickname,
-        "devices": candidates,
-    }
+    _awaiting_device_pick[user_id] = {"devices": candidates}
     lines = [
         f"{i}. {device['name'] or device['mac']} ({device['mac']})"
         for i, device in enumerate(candidates)
@@ -249,7 +230,23 @@ async def _finish_device_pick(update: Update, context: ContextTypes.DEFAULT_TYPE
     except (ValueError, IndexError):
         await update.message.reply_text("That's not a valid number. Send /adddevice to start over.")
         return
-    nickname = state["nickname"]
+    _awaiting_device_nickname[user_id] = device
+    await update.message.reply_text(
+        f"What nickname should I use for {device['name'] or device['mac']}?"
+    )
+
+
+async def _save_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    device = _awaiting_device_nickname.pop(user_id, None)
+    if device is None:
+        return
+    nickname = update.message.text.strip()
+    if not nickname:
+        await update.message.reply_text(
+            "The nickname can't be empty. Send /adddevice to try again."
+        )
+        return
     mac = device["mac"]
     await update.message.reply_text(f"Pairing with {device['name'] or mac}...")
 

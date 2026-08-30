@@ -2,10 +2,20 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import pytest
 from telegram.error import Conflict
 
 import bot
 import storage_bluetooth
+
+
+@pytest.fixture(autouse=True)
+def _clear_pending_state():
+    bot._awaiting_play_text.clear()
+    bot._awaiting_announce_text.clear()
+    bot._awaiting_device_pick.clear()
+    bot._awaiting_device_nickname.clear()
+    bot._pair_sessions.clear()
 
 
 def _run(coro):
@@ -203,37 +213,24 @@ def test_on_motion_announces_known_category(monkeypatch):
     announce_mock.assert_called_once_with("http://host/announce.mp3")
 
 
-def test_adddevice_prompts_for_nickname(monkeypatch):
+def test_adddevice_scans_and_lists_devices(monkeypatch):
     monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    discover = AsyncMock(return_value=[{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}])
+    monkeypatch.setattr(bot.presence, "discover_devices", discover)
     update = _update()
     context = _context()
 
     _run(bot.adddevice(update, context))
 
-    update.message.reply_text.assert_awaited_once_with(
-        "What nickname should I use for this device?"
-    )
-    assert 1 in bot._awaiting_device_nickname
-
-
-def test_adddevice_with_nickname_scans(monkeypatch):
-    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
-    discover = AsyncMock(return_value=[{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}])
-    monkeypatch.setattr(bot.presence, "discover_devices", discover)
-    update = _update()
-    context = _context(args=["Marta"])
-
-    _run(bot.adddevice(update, context))
-
-    reply = update.message.reply_text.call_args.args[0]
-    assert "0. Pixel 9 (AA:BB:CC:DD:EE:FF)" in reply
-    assert bot._awaiting_device_pick[1]["nickname"] == "Marta"
+    replies = [call.args[0] for call in update.message.reply_text.await_args_list]
+    assert any("Scanning for nearby Bluetooth devices" in r for r in replies)
+    assert any("0. Pixel 9 (AA:BB:CC:DD:EE:FF)" in r for r in replies)
     assert bot._awaiting_device_pick[1]["devices"] == [
         {"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}
     ]
 
 
-def test_scan_for_nickname_filters_known_devices(monkeypatch):
+def test_adddevice_filters_known_devices(monkeypatch):
     storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
     discover = AsyncMock(
         return_value=[
@@ -245,37 +242,40 @@ def test_scan_for_nickname_filters_known_devices(monkeypatch):
     update = _update()
     context = _context()
 
-    _run(bot._scan_for_nickname(update, context, "Bob"))
+    _run(bot.adddevice(update, context))
 
-    reply = update.message.reply_text.call_args.args[0]
-    assert "Pixel 9" not in reply
-    assert "0. iPad (11:22:33:44:55:66)" in reply
+    replies = [call.args[0] for call in update.message.reply_text.await_args_list]
+    assert not any("Pixel 9" in r for r in replies)
+    assert any("0. iPad (11:22:33:44:55:66)" in r for r in replies)
     assert bot._awaiting_device_pick[1]["devices"] == [{"mac": "11:22:33:44:55:66", "name": "iPad"}]
 
 
-def test_finish_device_pick_pairs_and_stores(monkeypatch):
-    monkeypatch.setattr(
-        bot.presence, "pair_device", AsyncMock(return_value=(True, "Paired and trusted"))
-    )
-    bot._awaiting_device_pick[1] = {
-        "nickname": "Marta",
-        "devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}],
-    }
+def test_adddevice_no_devices_found(monkeypatch):
+    monkeypatch.setattr(bot.presence, "discover_devices", AsyncMock(return_value=[]))
+    update = _update()
+    context = _context()
+
+    _run(bot.adddevice(update, context))
+
+    replies = [call.args[0] for call in update.message.reply_text.await_args_list]
+    assert any("No new devices found" in r for r in replies)
+    assert 1 not in bot._awaiting_device_pick
+
+
+def test_finish_device_pick_asks_for_nickname(monkeypatch):
+    bot._awaiting_device_pick[1] = {"devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}]}
     update = _update(text="0")
     context = _context()
 
     _run(bot._finish_device_pick(update, context))
 
     reply = update.message.reply_text.call_args.args[0]
-    assert "Added Marta (AA:BB:CC:DD:EE:FF)" in reply
-    assert storage_bluetooth.list_devices()[0]["nickname"] == "Marta"
+    assert "What nickname should I use for Pixel 9?" in reply
+    assert bot._awaiting_device_nickname[1] == {"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}
 
 
 def test_finish_device_pick_rejects_bad_index(monkeypatch):
-    bot._awaiting_device_pick[1] = {
-        "nickname": "Marta",
-        "devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}],
-    }
+    bot._awaiting_device_pick[1] = {"devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}]}
     update = _update(text="5")
     context = _context()
 
@@ -283,6 +283,33 @@ def test_finish_device_pick_rejects_bad_index(monkeypatch):
 
     reply = update.message.reply_text.call_args.args[0]
     assert "not a valid number" in reply
+    assert 1 not in bot._awaiting_device_nickname
+
+
+def test_save_nickname_pairs_and_stores(monkeypatch):
+    monkeypatch.setattr(
+        bot.presence, "pair_device", AsyncMock(return_value=(True, "Paired and trusted"))
+    )
+    bot._awaiting_device_nickname[1] = {"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}
+    update = _update(text="Marta")
+    context = _context()
+
+    _run(bot._save_nickname(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "Added Marta (AA:BB:CC:DD:EE:FF)" in reply
+    assert storage_bluetooth.list_devices()[0]["nickname"] == "Marta"
+
+
+def test_save_nickname_rejects_empty(monkeypatch):
+    bot._awaiting_device_nickname[1] = {"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}
+    update = _update(text="   ")
+    context = _context()
+
+    _run(bot._save_nickname(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "can't be empty" in reply
     assert storage_bluetooth.list_devices() == []
 
 
@@ -306,18 +333,30 @@ def test_answer_pair_confirm_no_sets_none():
     assert _run(scenario()) is None
 
 
+def test_route_text_routes_device_pick(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    finish_mock = AsyncMock()
+    monkeypatch.setattr(bot, "_finish_device_pick", finish_mock)
+    bot._awaiting_device_pick[5] = {"devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}]}
+    update = _update(user_id=5, text="0")
+    context = _context()
+
+    _run(bot._route_text(update, context))
+
+    finish_mock.assert_awaited_once_with(update, context)
+
+
 def test_route_text_routes_device_nickname(monkeypatch):
     monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
-    scan_mock = AsyncMock()
-    monkeypatch.setattr(bot, "_scan_for_nickname", scan_mock)
-    bot._awaiting_device_nickname.add(5)
+    save_mock = AsyncMock()
+    monkeypatch.setattr(bot, "_save_nickname", save_mock)
+    bot._awaiting_device_nickname[5] = {"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}
     update = _update(user_id=5, text="Marta")
     context = _context()
 
     _run(bot._route_text(update, context))
 
-    scan_mock.assert_awaited_once_with(update, context, "Marta")
-    assert 5 not in bot._awaiting_device_nickname
+    save_mock.assert_awaited_once_with(update, context)
 
 
 def test_route_text_routes_pair_confirm(monkeypatch):

@@ -136,9 +136,10 @@ manually against the real Nest Mini.
 - `/stop` — stop playback and clear the queue.
 - `/athome` — list registered Bluetooth devices and whether each is home or away
   (with the last time each was seen).
-- `/adddevice` — register a Bluetooth device to track. Prompts for a nickname, runs
-  a 15-second discovery scan, then pairs (confirming any passkey on your phone) and
-  trusts the device. The device can be removed again with `/rmdevice`.
+- `/adddevice` — register a Bluetooth device to track. Runs a 15-second discovery
+  scan, lists the devices found (known ones are filtered out), then asks for a
+  nickname and pairs (confirming any passkey on your phone) and trusts the device.
+  The device can be removed again with `/rmdevice`.
 - `/rmdevice <nickname|mac>` — stop tracking a device, by nickname or MAC address.
 - `/whoami` — reply with your Telegram user id, to put in `OWNER_USER_ID` /
   `ALLOWED_USER_IDS`.
@@ -171,8 +172,8 @@ your machine lacks a working adapter (or the group isn't set up), the feature is
 disabled with a warning at startup and `/athome`/`/adddevice`/`/rmdevice` report that
 no devices are registered.
 
-Register a device with `/adddevice` — give it a nickname, then pick your phone from
-the 15-second discovery scan. The bot pairs (you confirm any passkey shown on the
+Register a device with `/adddevice` — the bot scans, you pick your phone from the
+list, then give it a nickname. The bot pairs (you confirm any passkey shown on the
 phone) and trusts the device. Pairing is only needed once, at registration; afterwards
 the phone's Bluetooth can stay on with it never being discoverable.
 
