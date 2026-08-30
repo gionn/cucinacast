@@ -204,6 +204,13 @@ async def adddevice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _awaiting_device_nickname.pop(user_id, None)
     _pair_sessions.pop(user_id, None)
 
+    if not presence.bluetooth_available():
+        await update.message.reply_text(
+            "Bluetooth presence is disabled: no usable Bluetooth adapter was found "
+            "at startup. See the README for setup and restart the bot."
+        )
+        return
+
     args = context.args or []
     if args:
         try:

@@ -18,6 +18,11 @@ def _clear_pending_state():
     bot._pair_sessions.clear()
 
 
+@pytest.fixture(autouse=True)
+def _bluetooth_available(monkeypatch):
+    monkeypatch.setattr(bot.presence, "bluetooth_available", lambda: True)
+
+
 def _run(coro):
     return asyncio.run(coro)
 
@@ -215,6 +220,7 @@ def test_on_motion_announces_known_category(monkeypatch):
 
 def test_adddevice_scans_and_lists_devices(monkeypatch):
     monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    monkeypatch.setattr(bot.presence, "bluetooth_available", lambda: True)
     discover = AsyncMock(return_value=[{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}])
     monkeypatch.setattr(bot.presence, "discover_devices", discover)
     update = _update()
@@ -228,6 +234,22 @@ def test_adddevice_scans_and_lists_devices(monkeypatch):
     assert bot._awaiting_device_pick[1]["devices"] == [
         {"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}
     ]
+
+
+def test_adddevice_guards_when_bluetooth_unavailable(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    monkeypatch.setattr(bot.presence, "bluetooth_available", lambda: False)
+    discover = AsyncMock()
+    monkeypatch.setattr(bot.presence, "discover_devices", discover)
+    update = _update()
+    context = _context()
+
+    _run(bot.adddevice(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "Bluetooth presence is disabled" in reply
+    discover.assert_not_awaited()
+    assert 1 not in bot._awaiting_device_pick
 
 
 def test_adddevice_with_mac_and_nickname_pairs_directly(monkeypatch):

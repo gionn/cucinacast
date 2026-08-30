@@ -216,6 +216,7 @@ async def pair_device(mac, on_prompt):
         await _run_async(("bluetoothctl", "trust", mac), timeout=10)
     except Exception:
         logger.exception("Failed to trust %s", mac)
+        return True, "Paired but could not be trusted"
     return True, "Paired and trusted"
 
 
