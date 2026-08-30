@@ -117,14 +117,8 @@ async def _connect_camera():
     return camera
 
 
-async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS):
-    """Capture duration_seconds of the camera's live sub-stream (small/fast, good
-    enough for a Telegram notification) to a freshly named MP4 in a private temp
-    dir, and return its path — the caller is responsible for deleting it once
-    done. The sub-stream's raw pixel dimensions (720x576) don't match its actual
-    16:9 content and carry no aspect-ratio tag of their own, so "-aspect 16:9" is
-    passed at mux time to tag it without re-encoding the video."""
-    camera = await _connect_camera()
+async def _build_stream_url(camera):
+    """Return the camera's live sub-stream URL with credentials embedded."""
     media = await camera.create_media_service()
     profiles = await media.GetProfiles()
     if not profiles:
@@ -143,10 +137,17 @@ async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS):
         f"{urllib.parse.quote(user, safe='')}:{urllib.parse.quote(password, safe='')}"
         f"@{parsed.netloc}"
     )
-    stream_url = urllib.parse.urlunsplit(
+    return urllib.parse.urlunsplit(
         (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
     )
 
+
+async def _record_stream(stream_url, duration_seconds):
+    """Record duration_seconds of stream_url to a freshly named MP4 in a private
+    temp dir, returning its path. The sub-stream's raw pixel dimensions (720x576)
+    don't match its actual 16:9 content and carry no aspect-ratio tag of their
+    own, so "-aspect 16:9" is passed at mux time to tag it without re-encoding
+    the video."""
     fd, path = tempfile.mkstemp(dir=_clip_dir_path(), suffix=".mp4")
     os.close(fd)
     path = Path(path)
@@ -184,11 +185,25 @@ async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS):
     if proc.returncode != 0:
         path.unlink(missing_ok=True)
         message = stderr.decode(errors="replace")
+        password = _onvif_pass()
         for secret in (password, urllib.parse.quote(password, safe="")):
             if secret:
                 message = message.replace(secret, "***")
         raise RuntimeError(f"ffmpeg failed capturing motion clip: {message}")
     return path
+
+
+async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS):
+    """Capture duration_seconds of the camera's live sub-stream (small/fast, good
+    enough for a Telegram notification) to a freshly named MP4 in a private temp
+    dir, and return its path — the caller is responsible for deleting it once
+    done."""
+    camera = await _connect_camera()
+    try:
+        stream_url = await _build_stream_url(camera)
+        return await _record_stream(stream_url, duration_seconds)
+    finally:
+        await camera.close()
 
 
 async def watch_motion(on_motion):

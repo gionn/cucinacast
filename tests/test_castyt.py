@@ -207,16 +207,25 @@ def test_ensure_device_injects_live_zeroconf(monkeypatch):
 
 def test_ensure_device_reuses_zeroconf_after_reset(monkeypatch):
     devices = [_FakeDevice(), _FakeDevice()]
-    sentinel_zconf = object()
+    first_zconf = object()
+    second_zconf = object()
+    call_count = 0
+
+    def fake_zeroconf():
+        nonlocal call_count
+        call_count += 1
+        return first_zconf if call_count == 1 else second_zconf
+
     monkeypatch.setattr(castyt, "_get_device", Mock(side_effect=devices))
-    monkeypatch.setattr(castyt.zeroconf, "Zeroconf", lambda: sentinel_zconf)
+    monkeypatch.setattr(castyt.zeroconf, "Zeroconf", fake_zeroconf)
     player = castyt.Player()
 
     player._ensure_device()
     player._reset_cast_device_locked()
     player._ensure_device()
 
-    assert devices[1]._cast.socket_client.zconf is sentinel_zconf
+    assert devices[1]._cast.socket_client.zconf is first_zconf
+    assert call_count == 1
 
 
 def test_announce_captures_interrupted_position_and_plays_url(monkeypatch):
