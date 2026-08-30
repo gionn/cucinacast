@@ -335,3 +335,16 @@ def test_pair_times_out_when_no_output(monkeypatch):
     assert paired is False
     assert outcome == "timed out"
     assert b"quit\n" in proc.stdin.data
+
+
+def test_pair_times_out_waiting_for_user_confirmation(monkeypatch):
+    monkeypatch.setattr(presence, "PASSKEY_CONFIRM_TIMEOUT_SECONDS", 0.1)
+
+    async def _never_replies(passkey):
+        await asyncio.sleep(3600)
+
+    proc, (paired, outcome) = _run_pairing(
+        monkeypatch, [b"Confirm passkey 061796 (yes/no):\n"], on_prompt=_never_replies
+    )
+    assert paired is False
+    assert outcome == "timed out waiting for user confirmation"

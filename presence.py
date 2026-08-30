@@ -15,7 +15,8 @@ POLL_INTERVAL_SECONDS = 600
 MISS_THRESHOLD = 3
 DISCOVERY_TIMEOUT_SECONDS = 15
 PROBE_TIMEOUT_SECONDS = 8
-PAIR_TIMEOUT_SECONDS = 60
+PAIR_TIMEOUT_SECONDS = 180
+PASSKEY_CONFIRM_TIMEOUT_SECONDS = 90
 
 _HCI_DEVICE_RE = re.compile(r"^\s*hci\d+\s+([0-9A-F:]+)$", re.MULTILINE)
 _NEW_DEVICE_RE = re.compile(r"\[NEW\] Device ([0-9A-F:]+)(?:\s+(.*))?$", re.MULTILINE)
@@ -145,7 +146,9 @@ async def _pair_interactive(mac, on_prompt):
             if passkey_match:
                 passkey = passkey_match.group(1)
                 try:
-                    reply = await asyncio.wait_for(on_prompt(passkey), timeout=remaining)
+                    reply = await asyncio.wait_for(
+                        on_prompt(passkey), timeout=PASSKEY_CONFIRM_TIMEOUT_SECONDS
+                    )
                 except asyncio.TimeoutError:
                     outcome = "timed out waiting for user confirmation"
                     break

@@ -254,13 +254,13 @@ async def _save_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         future = asyncio.get_running_loop().create_future()
         _pair_sessions[user_id] = future
         await update.message.reply_text(
-            f"Confirm passkey {passkey} on the phone, then reply 'yes' to confirm "
-            "or 'no' to cancel."
+            f"Passkey {passkey}. Confirm it on your phone. I'll auto-confirm in "
+            "15 seconds — reply 'no' to cancel."
         )
         try:
-            reply = await asyncio.wait_for(future, timeout=120)
+            reply = await asyncio.wait_for(future, timeout=15)
         except asyncio.TimeoutError:
-            reply = None
+            reply = "yes"
         finally:
             _pair_sessions.pop(user_id, None)
         return reply
@@ -281,12 +281,12 @@ async def _answer_pair_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
     if future is None or future.done():
         return
     reply = update.message.text.strip().lower()
-    if reply in ("yes", "y", "ok", "confirm"):
-        future.set_result("yes")
-    elif reply in ("no", "n", "cancel"):
+    if reply in ("no", "n", "cancel"):
         future.set_result(None)
+    elif reply in ("yes", "y", "ok", "confirm"):
+        future.set_result("yes")
     else:
-        await update.message.reply_text("Reply 'yes' to confirm or 'no' to cancel.")
+        await update.message.reply_text("Reply 'no' to cancel the pairing.")
 
 
 def _format_last_seen(timestamp):
