@@ -383,7 +383,25 @@ def test_athome_lists_devices(monkeypatch):
 
     reply = update.message.reply_text.call_args.args[0]
     assert "Marta: home" in reply
-    assert "Bob: away (never seen)" in reply
+    assert "AA:BB:CC:DD:EE:FF: home" in reply
+    assert "Bob: away" in reply
+    assert "11:22:33:44:55:66: away (never seen)" in reply
+
+
+def test_athome_groups_multiple_devices_per_nickname(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "gionn")
+    storage_bluetooth.set_device_state("AA:BB:CC:DD:EE:FF", True, 0, 0.0)
+    storage_bluetooth.add_device("11:22:33:44:55:66", "gionn")
+    update = _update()
+    context = _context()
+
+    _run(bot.athome(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert reply.count("gionn: home") == 1
+    assert "AA:BB:CC:DD:EE:FF: home" in reply
+    assert "11:22:33:44:55:66: away (never seen)" in reply
 
 
 def test_athome_with_no_devices(monkeypatch):

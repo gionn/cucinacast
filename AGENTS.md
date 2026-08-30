@@ -174,9 +174,11 @@ the real Nest Mini and confirming audio actually plays.
     rule: a device flips home→away only after `MISS_THRESHOLD` consecutive
     misses, so a single probe failure (bluetooth hiccup) can't flap the state.
     Miss counts persist through `storage_bluetooth`, so a bot restart doesn't
-    reset the countdown. Transitions (home/away flips) go to
-    `on_transition(transition)`, which `bot.py` uses to notify the owner on
-    Telegram. Restarts on failure like `motion.run_forever`.
+    reset the countdown. Transitions (home/away flips) are collapsed to at most
+    one per nickname per poll (`_collapse_transitions`, preferring home when a
+    nickname has devices on both sides) and go to `on_transition(transition)`,
+    which `bot.py` uses to notify the owner on Telegram. Restarts on failure
+    like `motion.run_forever`.
   - `discover_devices()` runs a temporary `bluetoothctl scan on` and parses the
     `[NEW] Device` lines; `pair_device(mac, on_prompt)` drives an interactive
     `bluetoothctl` session (agent on / default-agent / pair / trust) and calls

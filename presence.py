@@ -274,6 +274,20 @@ async def check_presence():
     return transitions
 
 
+def _collapse_transitions(transitions):
+    """Collapse a poll cycle's transitions to at most one per nickname, so a
+    person with several devices doesn't get one notification per device. When a
+    nickname has both a home and an away transition in the same cycle, prefer
+    the home one (a single device in range means the person is reachable)."""
+    by_nickname = {}
+    for transition in transitions:
+        nickname = transition["nickname"]
+        current = by_nickname.get(nickname)
+        if current is None or (transition["home"] and not current["home"]):
+            by_nickname[nickname] = transition
+    return list(by_nickname.values())
+
+
 async def run_forever(on_transition, poll_interval_seconds=POLL_INTERVAL_SECONDS):
     """Poll presence every poll_interval_seconds and await
     on_transition(transition) for each home/away flip. Restarts on failure so a
@@ -284,7 +298,7 @@ async def run_forever(on_transition, poll_interval_seconds=POLL_INTERVAL_SECONDS
                 await asyncio.sleep(poll_interval_seconds)
                 continue
             transitions = await check_presence()
-            for transition in transitions:
+            for transition in _collapse_transitions(transitions):
                 try:
                     await on_transition(transition)
                 except Exception:

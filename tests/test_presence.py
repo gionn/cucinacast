@@ -193,6 +193,28 @@ def test_probe_runs_hcitool_without_sudo(monkeypatch):
     assert captured["cmd"] == ("hcitool", "name", "AA:BB:CC:DD:EE:FF")
 
 
+def test_collapse_transitions_keeps_one_per_nickname():
+    transitions = [
+        {"nickname": "gionn", "mac": "AA:BB:CC:DD:EE:FF", "home": True},
+        {"nickname": "gionn", "mac": "11:22:33:44:55:66", "home": True},
+        {"nickname": "Marta", "mac": "33:44:55:66:77:88", "home": False},
+    ]
+    assert presence._collapse_transitions(transitions) == [
+        {"nickname": "gionn", "mac": "AA:BB:CC:DD:EE:FF", "home": True},
+        {"nickname": "Marta", "mac": "33:44:55:66:77:88", "home": False},
+    ]
+
+
+def test_collapse_transitions_prefers_home_for_same_nickname():
+    transitions = [
+        {"nickname": "gionn", "mac": "AA:BB:CC:DD:EE:FF", "home": False},
+        {"nickname": "gionn", "mac": "11:22:33:44:55:66", "home": True},
+    ]
+    collapsed = presence._collapse_transitions(transitions)
+    assert len(collapsed) == 1
+    assert collapsed[0]["home"] is True
+
+
 def test_run_forever_skips_when_no_devices(monkeypatch):
     monkeypatch.setattr(presence.storage_bluetooth, "list_devices", lambda: [])
     called = []

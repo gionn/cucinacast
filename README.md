@@ -134,8 +134,10 @@ manually against the real Nest Mini.
   playback, then resume it from approximately where it left off. Same two-step prompt
   as `/play` if sent with no text.
 - `/stop` — stop playback and clear the queue.
-- `/athome` — list registered Bluetooth devices and whether each is home or away
-  (with the last time each was seen).
+- `/athome` — list registered Bluetooth devices grouped by person, with each
+  device's home/away status and the last time each was seen. Multiple devices
+  can share a nickname (e.g. a phone and a tablet), and a person is shown as
+  home as long as any of their devices is in range.
 - `/adddevice` — register a Bluetooth device to track. Runs a 15-second discovery
   scan, lists the devices found (known ones are filtered out), then asks for a
   nickname and pairs (confirming any passkey on your phone) and trusts the device.
@@ -180,9 +182,11 @@ the phone's Bluetooth can stay on with it never being discoverable.
 Every 10 minutes the bot pages each registered device via `hcitool name <mac>`, which
 works for any powered-on phone whether or not it's paired or discoverable. A device
 flips to "away" only after 3 consecutive missed polls (a single probe failure can't
-flap the state), and the miss count survives bot restarts. `/athome` shows each
-nickname with home/away status and last-seen time, and the owner gets a Telegram
-message whenever someone arrives or leaves.
+flap the state), and the miss count survives bot restarts. You can register several
+devices under one nickname (e.g. a phone and a tablet); each is tracked independently,
+but the owner gets at most one Telegram message per person per poll, and `/athome`
+groups the devices under their shared nickname. The owner is notified whenever someone
+arrives or leaves.
 
 The only real limitation: if a phone's Bluetooth is fully toggled off, the radio is
 silent and the bot will read it as "away" (after the 3-strike grace period). That's a

@@ -318,15 +318,23 @@ async def athome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
     lines = []
+    groups = {}
     for device in devices:
-        if device["home"]:
-            lines.append(f"{device['nickname']}: home")
-        elif device["last_seen"]:
-            lines.append(
-                f"{device['nickname']}: away (last seen {_format_last_seen(device['last_seen'])})"
-            )
-        else:
-            lines.append(f"{device['nickname']}: away (never seen)")
+        groups.setdefault(device["nickname"], []).append(device)
+    for nickname, group in groups.items():
+        home_devices = [device for device in group if device["home"]]
+        away_devices = [device for device in group if not device["home"]]
+        lines.append(f"{nickname}: {'home' if home_devices else 'away'}")
+        for device in home_devices:
+            lines.append(f"  • {device['mac']}: home")
+        for device in away_devices:
+            if device["last_seen"]:
+                lines.append(
+                    f"  • {device['mac']}: away (last seen "
+                    f"{_format_last_seen(device['last_seen'])})"
+                )
+            else:
+                lines.append(f"  • {device['mac']}: away (never seen)")
     await update.message.reply_text("\n".join(lines))
 
 
