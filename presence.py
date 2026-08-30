@@ -134,7 +134,7 @@ async def _pair_interactive(mac, on_prompt):
                 outcome = "bluetoothctl exited before pairing finished"
                 break
             line = _strip_ansi(line.decode(errors="replace")).strip()
-            logger.info("bluetoothctl: %s", line)
+            logger.info("bluetoothctl: %s", " ".join(line.split()))
             if "Pairing successful" in line:
                 paired = True
                 outcome = "success"

@@ -329,6 +329,14 @@ def test_pair_confirms_passkey_then_succeeds(monkeypatch):
     assert replies == ["123456"]
 
 
+def test_pair_logs_collapse_bluetoothctl_whitespace(monkeypatch, caplog):
+    _patch_proc(monkeypatch, [b"[bluetooth]#                Agent registered\n"])
+    with caplog.at_level("INFO", logger="presence"):
+        _run(presence._pair_interactive("AA:BB:CC:DD:EE:FF", lambda p: None))
+    bluetooth_lines = [r.message for r in caplog.records if "bluetoothctl:" in r.message]
+    assert any("[bluetooth]# Agent registered" in m for m in bluetooth_lines)
+
+
 def test_pair_times_out_when_no_output(monkeypatch):
     monkeypatch.setattr(presence, "PAIR_TIMEOUT_SECONDS", 0.1)
     proc, (paired, outcome) = _run_pairing(monkeypatch, [], hang=True)
