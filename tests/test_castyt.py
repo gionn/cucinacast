@@ -193,16 +193,15 @@ def test_new_media_status_falls_back_without_reset_on_generic_error_resuming():
 
 def test_ensure_device_injects_live_zeroconf(monkeypatch):
     fake_device = _FakeDevice()
-<<<<<<< HEAD
     sentinel_zconf = object()
     monkeypatch.setattr(castyt, "_get_device", lambda: fake_device)
-    monkeypatch.setattr(castyt.zeroconf, "Zeroconf", fake_zeroconf)
+    monkeypatch.setattr(castyt.zeroconf, "Zeroconf", lambda: sentinel_zconf)
     player = castyt.Player()
 
     player._ensure_device()
 
     assert player._device is fake_device
-    assert fake_device._cast.socket_client.zconf is not None
+    assert fake_device._cast.socket_client.zconf is sentinel_zconf
     fake_device._cast.media_controller.register_status_listener.assert_called_once_with(player)
 
 
