@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 from telegram.error import Conflict
 
 import bot
+import storage_bluetooth
 
 
 def _run(coro):
@@ -200,3 +201,229 @@ def test_on_motion_announces_known_category(monkeypatch):
     _run(bot._on_motion("person"))
 
     announce_mock.assert_called_once_with("http://host/announce.mp3")
+
+
+def test_adddevice_prompts_for_nickname(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    update = _update()
+    context = _context()
+
+    _run(bot.adddevice(update, context))
+
+    update.message.reply_text.assert_awaited_once_with(
+        "What nickname should I use for this device?"
+    )
+    assert 1 in bot._awaiting_device_nickname
+
+
+def test_adddevice_with_nickname_scans(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    discover = AsyncMock(return_value=[{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}])
+    monkeypatch.setattr(bot.presence, "discover_devices", discover)
+    update = _update()
+    context = _context(args=["Marta"])
+
+    _run(bot.adddevice(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "0. Pixel 9 (AA:BB:CC:DD:EE:FF)" in reply
+    assert bot._awaiting_device_pick[1]["nickname"] == "Marta"
+    assert bot._awaiting_device_pick[1]["devices"] == [
+        {"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}
+    ]
+
+
+def test_scan_for_nickname_filters_known_devices(monkeypatch):
+    storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
+    discover = AsyncMock(
+        return_value=[
+            {"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"},
+            {"mac": "11:22:33:44:55:66", "name": "iPad"},
+        ]
+    )
+    monkeypatch.setattr(bot.presence, "discover_devices", discover)
+    update = _update()
+    context = _context()
+
+    _run(bot._scan_for_nickname(update, context, "Bob"))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "Pixel 9" not in reply
+    assert "0. iPad (11:22:33:44:55:66)" in reply
+    assert bot._awaiting_device_pick[1]["devices"] == [{"mac": "11:22:33:44:55:66", "name": "iPad"}]
+
+
+def test_finish_device_pick_pairs_and_stores(monkeypatch):
+    monkeypatch.setattr(
+        bot.presence, "pair_device", AsyncMock(return_value=(True, "Paired and trusted"))
+    )
+    bot._awaiting_device_pick[1] = {
+        "nickname": "Marta",
+        "devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}],
+    }
+    update = _update(text="0")
+    context = _context()
+
+    _run(bot._finish_device_pick(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "Added Marta (AA:BB:CC:DD:EE:FF)" in reply
+    assert storage_bluetooth.list_devices()[0]["nickname"] == "Marta"
+
+
+def test_finish_device_pick_rejects_bad_index(monkeypatch):
+    bot._awaiting_device_pick[1] = {
+        "nickname": "Marta",
+        "devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}],
+    }
+    update = _update(text="5")
+    context = _context()
+
+    _run(bot._finish_device_pick(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "not a valid number" in reply
+    assert storage_bluetooth.list_devices() == []
+
+
+def test_answer_pair_confirm_yes_sets_result():
+    async def scenario():
+        future = asyncio.get_running_loop().create_future()
+        bot._pair_sessions[1] = future
+        await bot._answer_pair_confirm(_update(text="yes"), _context())
+        return future.result()
+
+    assert _run(scenario()) == "yes"
+
+
+def test_answer_pair_confirm_no_sets_none():
+    async def scenario():
+        future = asyncio.get_running_loop().create_future()
+        bot._pair_sessions[1] = future
+        await bot._answer_pair_confirm(_update(text="no"), _context())
+        return future.result()
+
+    assert _run(scenario()) is None
+
+
+def test_route_text_routes_device_nickname(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    scan_mock = AsyncMock()
+    monkeypatch.setattr(bot, "_scan_for_nickname", scan_mock)
+    bot._awaiting_device_nickname.add(5)
+    update = _update(user_id=5, text="Marta")
+    context = _context()
+
+    _run(bot._route_text(update, context))
+
+    scan_mock.assert_awaited_once_with(update, context, "Marta")
+    assert 5 not in bot._awaiting_device_nickname
+
+
+def test_route_text_routes_pair_confirm(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+
+    async def scenario():
+        future = asyncio.get_running_loop().create_future()
+        bot._pair_sessions[5] = future
+        await bot._route_text(_update(user_id=5, text="yes"), _context())
+        return future.result()
+
+    assert _run(scenario()) == "yes"
+
+
+def test_athome_lists_devices(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
+    storage_bluetooth.set_device_state("AA:BB:CC:DD:EE:FF", True, 0, 0.0)
+    storage_bluetooth.add_device("11:22:33:44:55:66", "Bob")
+    update = _update()
+    context = _context()
+
+    _run(bot.athome(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "Marta: home" in reply
+    assert "Bob: away (never seen)" in reply
+
+
+def test_athome_with_no_devices(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    update = _update()
+    context = _context()
+
+    _run(bot.athome(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "No devices registered" in reply
+
+
+def test_rmdevice_removes_by_nickname(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
+    update = _update()
+    context = _context(args=["Marta"])
+
+    _run(bot.rmdevice(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "Removed Marta (AA:BB:CC:DD:EE:FF)" in reply
+    assert storage_bluetooth.list_devices() == []
+
+
+def test_rmdevice_removes_by_mac(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
+    update = _update()
+    context = _context(args=["aa:bb:cc:dd:ee:ff"])
+
+    _run(bot.rmdevice(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "Removed Marta (AA:BB:CC:DD:EE:FF)" in reply
+
+
+def test_rmdevice_not_found(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    update = _update()
+    context = _context(args=["Nobody"])
+
+    _run(bot.rmdevice(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "No device matching" in reply
+
+
+def test_rmdevice_requires_argument(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    update = _update()
+    context = _context()
+
+    _run(bot.rmdevice(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "Usage:" in reply
+
+
+def test_on_presence_transition_notifies_owner(monkeypatch):
+    send_mock = AsyncMock()
+    monkeypatch.setattr(bot, "_bot", SimpleNamespace(send_message=send_mock))
+    monkeypatch.setattr(bot, "OWNER_USER_ID", 42)
+
+    _run(
+        bot._on_presence_transition({"nickname": "Marta", "mac": "AA:BB:CC:DD:EE:FF", "home": True})
+    )
+
+    send_mock.assert_awaited_once_with(chat_id=42, text="Marta is now home.")
+
+
+def test_on_presence_transition_notifies_owner_away(monkeypatch):
+    send_mock = AsyncMock()
+    monkeypatch.setattr(bot, "_bot", SimpleNamespace(send_message=send_mock))
+    monkeypatch.setattr(bot, "OWNER_USER_ID", 42)
+
+    _run(
+        bot._on_presence_transition({"nickname": "Bob", "mac": "AA:BB:CC:DD:EE:FF", "home": False})
+    )
+
+    send_mock.assert_awaited_once_with(chat_id=42, text="Bob is now away.")

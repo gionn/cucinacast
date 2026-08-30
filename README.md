@@ -1,8 +1,9 @@
 # CucinaCast
 
 Telegram bot that searches YouTube and casts the top result to a Nest Mini (Chromecast).
-It can also speak a custom announcement on demand, and, with an ONVIF camera configured,
-announce motion (person/animal/vehicle) automatically.
+It can also speak a custom announcement on demand, with an ONVIF camera configured,
+announce motion (person/animal/vehicle) automatically, and, with a Bluetooth adapter,
+track who's home via their phones' presence.
 
 Named after "cucina" (Italian for kitchen) — the Nest Mini it talks to lives in the
 kitchen.
@@ -80,6 +81,10 @@ feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
   in which motion-triggered announcements are suppressed (default `22`/`8`, i.e.
   10pm-8am). Only affects automatic doorbell announcements from motion detection;
   the manual `/announce` command always works.
+- `PRESENCE_NO_SUDO` — drop the `sudo` prefix from the `hcitool`/`bluetoothctl`
+  commands used for Bluetooth presence tracking. Only needed in environments where
+  the service already runs with sufficient privileges (e.g. as root in a container);
+  normally presence requires passwordless sudo for the service user.
 
 ## Run the bot
 
@@ -112,10 +117,13 @@ sudo journalctl -u cucinacast -f
 ```
 
 `requirements-dev.txt` pulls in `requirements.txt` plus `pytest`. The test suite
-covers the search-ranking/caching logic in `castyt.py` and the play-history storage
-logic in `storage.py`, with the actual `yt-dlp`/sqlite calls mocked/isolated.
-Everything that touches the real Chromecast, camera, or Telegram API has no
-automated coverage — verify those manually against the real Nest Mini.
+covers the search-ranking/caching logic in `castyt.py`, the play-history storage
+logic in `storage.py`, the Bluetooth-presence storage logic in
+`storage_bluetooth.py`, and the presence state machine in `presence.py`, with the
+actual `yt-dlp`/sqlite calls mocked/isolated and the `hcitool`/`bluetoothctl`
+subprocesses never invoked. Everything that touches the real Chromecast, camera,
+Bluetooth hardware, or Telegram API has no automated coverage — verify those
+manually against the real Nest Mini.
 
 ## Bot commands
 
@@ -130,11 +138,17 @@ automated coverage — verify those manually against the real Nest Mini.
   playback, then resume it from approximately where it left off. Same two-step prompt
   as `/play` if sent with no text.
 - `/stop` — stop playback and clear the queue.
+- `/athome` — list registered Bluetooth devices and whether each is home or away
+  (with the last time each was seen).
+- `/adddevice` — register a Bluetooth device to track. Prompts for a nickname, runs
+  a 15-second discovery scan, then pairs (confirming any passkey on your phone) and
+  trusts the device. The device can be removed again with `/rmdevice`.
+- `/rmdevice <nickname|mac>` — stop tracking a device, by nickname or MAC address.
 - `/whoami` — reply with your Telegram user id, to put in `OWNER_USER_ID` /
   `ALLOWED_USER_IDS`.
 
-`/start` and `/whoami` are intentionally left out of the bot's `/`-menu (only `/play`,
-`/announce`, and `/stop` show there) but still work when typed.
+`/start` and `/whoami` are intentionally left out of the bot's `/`-menu (only the
+casting and presence commands show there) but still work when typed.
 
 ## Motion detection announcements
 
@@ -151,6 +165,30 @@ If `ffmpeg` is available on `PATH`, a short clip of the camera's live sub-stream
 also sent to the bot owner on Telegram alongside the spoken announcement. If
 `ffmpeg` is missing, this is skipped and only the audio announcement plays — motion
 detection itself is unaffected either way.
+
+## Bluetooth presence
+
+If the machine running the bot has a Bluetooth adapter, the bot can track who's home
+by monitoring registered phones. This needs `hcitool` and `bluetoothctl` installed
+and passwordless sudo for the service user (the same user the systemd service runs
+as); if your machine lacks a working adapter, the feature is silently disabled and
+`/athome`/`/adddevice`/`/rmdevice` report that no devices are registered.
+
+Register a device with `/adddevice` — give it a nickname, then pick your phone from
+the 15-second discovery scan. The bot pairs (you confirm any passkey shown on the
+phone) and trusts the device. Pairing is only needed once, at registration; afterwards
+the phone's Bluetooth can stay on with it never being discoverable.
+
+Every 10 minutes the bot pages each registered device via `hcitool name <mac>`, which
+works for any powered-on phone whether or not it's paired or discoverable. A device
+flips to "away" only after 3 consecutive missed polls (a single probe failure can't
+flap the state), and the miss count survives bot restarts. `/athome` shows each
+nickname with home/away status and last-seen time, and the owner gets a Telegram
+message whenever someone arrives or leaves.
+
+The only real limitation: if a phone's Bluetooth is fully toggled off, the radio is
+silent and the bot will read it as "away" (after the 3-strike grace period). That's a
+property of Bluetooth itself, not of the bot.
 
 ## Known limitation
 
