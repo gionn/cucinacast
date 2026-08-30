@@ -58,7 +58,6 @@ def test_remove_device():
     assert storage_bluetooth.list_devices() == []
 
 
-def test_add_duplicate_mac_raises():
-    storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
-    with pytest.raises(Exception):
-        storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Someone Else")
+def test_add_duplicate_mac_returns_false():
+    assert storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta") is True
+    assert storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Someone Else") is False

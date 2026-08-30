@@ -241,6 +241,8 @@ async def _finish_device_pick(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     try:
         index = int(update.message.text.strip())
+        if not 0 <= index < len(state["devices"]):
+            raise IndexError
         device = state["devices"][index]
     except (ValueError, IndexError):
         await update.message.reply_text("That's not a valid number. Send /adddevice to start over.")
@@ -256,6 +258,9 @@ async def _pair_and_store(
 ) -> None:
     user_id = update.effective_user.id
     name = display_name or mac
+    if mac in {device["mac"] for device in storage_bluetooth.list_devices()}:
+        await update.message.reply_text(f"{name} is already registered.")
+        return
     await update.message.reply_text(f"Pairing with {name}...")
 
     async def on_prompt(passkey):
@@ -277,7 +282,9 @@ async def _pair_and_store(
     if not ok:
         await update.message.reply_text(f"Pairing failed: {message}")
         return
-    storage_bluetooth.add_device(mac, nickname)
+    if not storage_bluetooth.add_device(mac, nickname):
+        await update.message.reply_text(f"{name} is already registered.")
+        return
     await update.message.reply_text(
         f"Added {nickname} ({mac}). I'll track their presence from now on."
     )

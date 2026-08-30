@@ -279,6 +279,22 @@ def test_adddevice_rejects_invalid_mac(monkeypatch):
     assert storage_bluetooth.list_devices() == []
 
 
+def test_adddevice_rejects_already_registered_mac(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    pair_mock = AsyncMock()
+    monkeypatch.setattr(bot.presence, "pair_device", pair_mock)
+    storage_bluetooth.add_device("C2:06:19:03:24:4D", "gionn")
+    update = _update()
+    context = _context(args=["C2:06:19:03:24:4D", "someone"])
+
+    _run(bot.adddevice(update, context))
+
+    pair_mock.assert_not_awaited()
+    reply = update.message.reply_text.call_args.args[0]
+    assert "already registered" in reply
+    assert storage_bluetooth.list_devices()[0]["nickname"] == "gionn"
+
+
 def test_adddevice_filters_known_devices(monkeypatch):
     storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
     discover = AsyncMock(
@@ -326,6 +342,18 @@ def test_finish_device_pick_asks_for_nickname(monkeypatch):
 def test_finish_device_pick_rejects_bad_index(monkeypatch):
     bot._awaiting_device_pick[1] = {"devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}]}
     update = _update(text="5")
+    context = _context()
+
+    _run(bot._finish_device_pick(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "not a valid number" in reply
+    assert 1 not in bot._awaiting_device_nickname
+
+
+def test_finish_device_pick_rejects_negative_index(monkeypatch):
+    bot._awaiting_device_pick[1] = {"devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}]}
+    update = _update(text="-1")
     context = _context()
 
     _run(bot._finish_device_pick(update, context))

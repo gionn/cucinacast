@@ -31,10 +31,14 @@ def normalize_mac(mac):
 
 def add_device(mac, nickname):
     with _connect() as conn:
-        conn.execute(
-            "INSERT INTO devices (mac, nickname, added_at) VALUES (?, ?, ?)",
-            (mac, nickname, time.time()),
-        )
+        try:
+            conn.execute(
+                "INSERT INTO devices (mac, nickname, added_at) VALUES (?, ?, ?)",
+                (mac, nickname, time.time()),
+            )
+        except sqlite3.IntegrityError:
+            return False
+    return True
 
 
 def remove_device(mac):
