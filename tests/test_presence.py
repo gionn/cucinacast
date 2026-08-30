@@ -16,7 +16,9 @@ def _run(coro):
 
 
 def test_bluetooth_available_true_when_adapter_present(monkeypatch):
-    monkeypatch.setattr(presence, "_run_checked", lambda cmd, timeout=15: "hci0 DC:A6:32:95:50:20")
+    monkeypatch.setattr(
+        presence, "_run_checked", lambda cmd, timeout=15: "Devices:\n\thci0\tDC:A6:32:95:50:20"
+    )
     assert presence.bluetooth_available() is True
 
 

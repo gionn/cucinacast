@@ -18,7 +18,7 @@ DISCOVERY_TIMEOUT_SECONDS = 15
 PROBE_TIMEOUT_SECONDS = 8
 PAIR_TIMEOUT_SECONDS = 60
 
-_HCI_DEVICE_RE = re.compile(r"^hci\d+\s+([0-9A-F:]+)$", re.MULTILINE)
+_HCI_DEVICE_RE = re.compile(r"^\s*hci\d+\s+([0-9A-F:]+)$", re.MULTILINE)
 _NEW_DEVICE_RE = re.compile(r"\[NEW\] Device ([0-9A-F:]+)(?:\s+(.*))?$", re.MULTILINE)
 _PASSKEY_RE = re.compile(r"(?:Confirm passkey|Enter passkey) (\d+)")
 
