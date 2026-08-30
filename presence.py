@@ -21,13 +21,14 @@ _HCI_DEVICE_RE = re.compile(r"^\s*hci\d+\s+([0-9A-F:]+)$", re.MULTILINE)
 _NEW_DEVICE_RE = re.compile(r"\[NEW\] Device ([0-9A-F:]+)(?:\s+(.*))?$", re.MULTILINE)
 _DEVICE_NAME_RE = re.compile(r"\[CHG\] Device ([0-9A-F:]+) (?:Name|Alias): (.+)$", re.MULTILINE)
 _PASSKEY_RE = re.compile(r"(?:Confirm passkey|Enter passkey) (\d+)")
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_ANSI_RE = re.compile(r"\x1b\[[?0-9;]*[a-zA-Z]")
 
 
 def _strip_ansi(text):
-    """Strip ANSI SGR color codes and the SOH/STX control bytes bluetoothctl
-    wraps around colored tokens, so the plain-text regexes below match."""
-    return _ANSI_RE.sub("", text.replace("\x01", "").replace("\x02", ""))
+    """Strip ANSI escape sequences (colors, cursor movement, private modes)
+    and the SOH/STX control bytes bluetoothctl wraps around colored tokens, so
+    the plain-text regexes below match and logs stay readable."""
+    return _ANSI_RE.sub("", text.replace("\x01", "").replace("\x02", "").replace("\r", ""))
 
 
 def bluetooth_available():
@@ -106,51 +107,73 @@ async def discover_devices(timeout_seconds=DISCOVERY_TIMEOUT_SECONDS):
 async def _pair_interactive(mac, on_prompt):
     """Pair with a device using an interactive bluetoothctl session. on_prompt
     is called with a passkey/confirm prompt and must return a reply (or None to
-    abort); returns True on successful pairing, False on failure/abort."""
-    cmd = ("bluetoothctl",)
+    abort); returns (paired: bool, outcome: str)."""
     proc = await asyncio.create_subprocess_exec(
-        *cmd,
+        "bluetoothctl",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
     start = time.monotonic()
     paired = False
+    outcome = "unknown"
     try:
         await _feed(proc, "agent on")
         await _feed(proc, "default-agent")
         await _feed(proc, f"pair {mac}")
         while True:
-            if time.monotonic() - start > PAIR_TIMEOUT_SECONDS:
-                await _feed(proc, "quit")
-                raise TimeoutError(f"Pairing with {mac} timed out")
-            line = await _read_line(proc, timeout=5)
+            remaining = PAIR_TIMEOUT_SECONDS - (time.monotonic() - start)
+            if remaining <= 0:
+                outcome = "timed out"
+                break
+            line = await _read_line(proc, timeout=min(5, remaining))
             if line is None:
+                continue
+            if not line:
+                outcome = "bluetoothctl exited before pairing finished"
                 break
             line = _strip_ansi(line.decode(errors="replace")).strip()
             logger.info("bluetoothctl: %s", line)
             if "Pairing successful" in line:
                 paired = True
+                outcome = "success"
                 break
             if "Failed to pair" in line or "Device not available" in line:
+                outcome = "bluetoothctl reported failure"
                 break
-            if "Attempting to pair" in line or "Pairing" in line:
-                continue
             passkey_match = _PASSKEY_RE.search(line)
             if passkey_match:
                 passkey = passkey_match.group(1)
-                reply = await on_prompt(passkey)
+                try:
+                    reply = await asyncio.wait_for(on_prompt(passkey), timeout=remaining)
+                except asyncio.TimeoutError:
+                    outcome = "timed out waiting for user confirmation"
+                    break
                 if reply is None:
-                    await _feed(proc, "cancel")
-                    return False
+                    outcome = "aborted by user"
+                    break
                 await _feed(proc, reply)
-    except (asyncio.TimeoutError, BrokenPipeError):
-        logger.exception("Pairing session with %s failed", mac)
+    except (BrokenPipeError, ConnectionResetError):
+        outcome = "bluetoothctl connection lost"
     finally:
+        await _stop_interactive(proc)
+    logger.info("Pairing session with %s finished: %s", mac, outcome)
+    return paired, outcome
+
+
+async def _stop_interactive(proc):
+    """Send quit and wait for bluetoothctl to exit, killing it if it won't, so
+    a hung session can't leak a process that holds the BlueZ agent."""
+    with suppress(Exception):
+        proc.stdin.write(b"quit\n")
+        await proc.stdin.drain()
+        proc.stdin.close()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        proc.kill()
         with suppress(Exception):
-            proc.stdin.close()
-        await proc.wait()
-    return paired
+            await asyncio.wait_for(proc.wait(), timeout=5)
 
 
 async def _feed(proc, text):
@@ -172,12 +195,10 @@ async def _read_line(proc, timeout):
 async def pair_device(mac, on_prompt):
     """Pair + trust a device. Returns (ok: bool, message: str)."""
     mac = storage_bluetooth.normalize_mac(mac)
-    try:
-        success = await _pair_interactive(mac, on_prompt)
-    except TimeoutError as exc:
-        return False, str(exc)
+    success, outcome = await _pair_interactive(mac, on_prompt)
     if not success:
-        return False, "Pairing failed or was aborted"
+        logger.info("Pairing with %s failed: %s", mac, outcome)
+        return False, outcome
     try:
         await _run_async(("bluetoothctl", "trust", mac), timeout=10)
     except Exception:

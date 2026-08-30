@@ -220,3 +220,118 @@ def test_run_forever_restarts_after_failure(monkeypatch):
 
     _run(scenario())
     assert calls["count"] >= 2
+
+
+class _FakeStdin:
+    def __init__(self):
+        self.data = []
+
+    def write(self, chunk):
+        self.data.append(chunk)
+
+    async def drain(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _FakeStdout:
+    def __init__(self, lines, hang=False):
+        self._lines = list(lines)
+        self._hang = hang
+
+    def at_eof(self):
+        return not self._lines
+
+    async def readline(self):
+        if self._lines:
+            return self._lines.pop(0)
+        if self._hang:
+            await asyncio.sleep(3600)
+        return b""
+
+
+class _FakeProc:
+    def __init__(self, lines, hang=False):
+        self.stdin = _FakeStdin()
+        self.stdout = _FakeStdout(lines, hang=hang)
+        self.killed = False
+
+    async def wait(self):
+        return 0
+
+    def kill(self):
+        self.killed = True
+
+
+def _patch_proc(monkeypatch, lines, hang=False):
+    proc = _FakeProc(lines, hang=hang)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=proc))
+    return proc
+
+
+def _run_pairing(monkeypatch, lines, hang=False, on_prompt=None):
+    proc = _patch_proc(monkeypatch, lines, hang=hang)
+
+    async def _confirm(passkey):
+        return "yes"
+
+    result = _run(presence._pair_interactive("AA:BB:CC:DD:EE:FF", on_prompt or _confirm))
+    return proc, result
+
+
+def test_pair_success_via_patch(monkeypatch):
+    proc, (paired, outcome) = _run_pairing(monkeypatch, [b"Pairing successful\n"])
+    assert paired is True
+    assert outcome == "success"
+
+
+def test_pair_failure_on_bluetoothctl_exit(monkeypatch):
+    proc, (paired, outcome) = _run_pairing(monkeypatch, [b"Attempting to pair\n"])
+    assert paired is False
+    assert outcome == "bluetoothctl exited before pairing finished"
+
+
+def test_pair_failure_reported_by_bluetoothctl(monkeypatch):
+    proc, (paired, outcome) = _run_pairing(monkeypatch, [b"Failed to pair\n"])
+    assert paired is False
+    assert outcome == "bluetoothctl reported failure"
+
+
+def test_pair_aborted_by_user(monkeypatch):
+    async def _abort(passkey):
+        return None
+
+    proc, (paired, outcome) = _run_pairing(
+        monkeypatch,
+        [b"Attempting to pair\n", b"Confirm passkey 123456\n"],
+        on_prompt=_abort,
+    )
+    assert paired is False
+    assert outcome == "aborted by user"
+
+
+def test_pair_confirms_passkey_then_succeeds(monkeypatch):
+    replies = []
+
+    async def on_prompt(passkey):
+        replies.append(passkey)
+        return "yes"
+
+    proc, (paired, outcome) = _run_pairing(
+        monkeypatch,
+        [b"Confirm passkey 123456\n", b"Pairing successful\n"],
+        on_prompt=on_prompt,
+    )
+    assert paired is True
+    assert outcome == "success"
+    assert replies == ["123456"]
+
+
+def test_pair_times_out_when_no_output(monkeypatch):
+    monkeypatch.setattr(presence, "PAIR_TIMEOUT_SECONDS", 0.1)
+    proc, (paired, outcome) = _run_pairing(monkeypatch, [], hang=True)
+    assert paired is False
+    assert outcome == "timed out"
+    assert b"quit\n" in proc.stdin.data
