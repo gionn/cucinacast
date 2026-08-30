@@ -19,6 +19,7 @@ def _fake_camera(stream_uri="rtsp://cam/stream", profiles=None):
     media.GetStreamUri = AsyncMock(return_value=SimpleNamespace(Uri=stream_uri))
     camera = Mock()
     camera.create_media_service = AsyncMock(return_value=media)
+    camera.close = AsyncMock()
     return camera
 
 
@@ -37,11 +38,12 @@ def _fake_proc(returncode=0, stderr=b"", times_out=False):
 def _patch_capture_deps(monkeypatch, tmp_path, proc):
     monkeypatch.setenv("ONVIF_USER", "admin")
     monkeypatch.setenv("ONVIF_PASS", "p@ss:word")
-    monkeypatch.setattr(motion, "_connect_camera", AsyncMock(return_value=_fake_camera()))
+    camera = _fake_camera()
+    monkeypatch.setattr(motion, "_connect_camera", AsyncMock(return_value=camera))
     monkeypatch.setattr(motion, "_clip_dir_path", lambda: str(tmp_path))
     create_subprocess_mock = AsyncMock(return_value=proc)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_mock)
-    return create_subprocess_mock
+    return create_subprocess_mock, camera
 
 
 def test_describe_object_matches_person_keywords():
@@ -110,7 +112,7 @@ def test_onvif_user_and_pass_respect_env(monkeypatch):
 
 def test_capture_clip_returns_path_and_encodes_credentials(monkeypatch, tmp_path):
     proc = _fake_proc(returncode=0)
-    create_subprocess_mock = _patch_capture_deps(monkeypatch, tmp_path, proc)
+    create_subprocess_mock, camera = _patch_capture_deps(monkeypatch, tmp_path, proc)
 
     path = _run(motion.capture_clip(duration_seconds=1))
 
@@ -120,37 +122,41 @@ def test_capture_clip_returns_path_and_encodes_credentials(monkeypatch, tmp_path
     stream_url = args[args.index("-i") + 1]
     assert "admin:p@ss:word@" not in stream_url
     assert "p%40ss%3Aword" in stream_url
+    camera.close.assert_awaited_once()
 
 
 def test_capture_clip_raises_clear_error_on_empty_profiles(monkeypatch, tmp_path):
     monkeypatch.setenv("ONVIF_USER", "admin")
     monkeypatch.setenv("ONVIF_PASS", "secret")
-    monkeypatch.setattr(
-        motion, "_connect_camera", AsyncMock(return_value=_fake_camera(profiles=[]))
-    )
+    camera = _fake_camera(profiles=[])
+    monkeypatch.setattr(motion, "_connect_camera", AsyncMock(return_value=camera))
     monkeypatch.setattr(motion, "_clip_dir_path", lambda: str(tmp_path))
 
     with pytest.raises(RuntimeError, match="no ONVIF media profiles"):
         _run(motion.capture_clip(duration_seconds=1))
 
+    camera.close.assert_awaited_once()
+
 
 def test_capture_clip_deletes_file_and_redacts_password_on_failure(monkeypatch, tmp_path):
     proc = _fake_proc(returncode=1, stderr=b"auth rejected for password p@ss:word")
-    _patch_capture_deps(monkeypatch, tmp_path, proc)
+    _, camera = _patch_capture_deps(monkeypatch, tmp_path, proc)
 
     with pytest.raises(RuntimeError) as exc_info:
         _run(motion.capture_clip(duration_seconds=1))
 
     assert "p@ss:word" not in str(exc_info.value)
     assert list(tmp_path.iterdir()) == []
+    camera.close.assert_awaited_once()
 
 
 def test_capture_clip_kills_process_and_deletes_file_on_timeout(monkeypatch, tmp_path):
     proc = _fake_proc(times_out=True)
-    _patch_capture_deps(monkeypatch, tmp_path, proc)
+    _, camera = _patch_capture_deps(monkeypatch, tmp_path, proc)
 
     with pytest.raises(RuntimeError, match="timed out"):
         _run(motion.capture_clip(duration_seconds=1))
 
     proc.kill.assert_called_once()
     assert list(tmp_path.iterdir()) == []
+    camera.close.assert_awaited_once()
