@@ -19,6 +19,7 @@ def _fake_camera(stream_uri="rtsp://cam/stream", profiles=None):
     media.GetStreamUri = AsyncMock(return_value=SimpleNamespace(Uri=stream_uri))
     camera = Mock()
     camera.create_media_service = AsyncMock(return_value=media)
+    camera.close = AsyncMock()
     return camera
 
 
