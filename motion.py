@@ -117,79 +117,91 @@ async def _connect_camera():
     return camera
 
 
+async def _build_stream_url(camera):
+    """Return the camera's live sub-stream URL with credentials embedded."""
+    media = await camera.create_media_service()
+    profiles = await media.GetProfiles()
+    if not profiles:
+        raise RuntimeError("Camera returned no ONVIF media profiles")
+    profile = next((p for p in profiles if "sub" in p.token.lower()), profiles[-1])
+
+    uri_resp = await media.GetStreamUri(
+        {
+            "StreamSetup": {"Stream": "RTP-Unicast", "Transport": {"Protocol": "RTSP"}},
+            "ProfileToken": profile.token,
+        }
+    )
+    user, password = _onvif_user(), _onvif_pass()
+    parsed = urllib.parse.urlsplit(uri_resp.Uri)
+    netloc = (
+        f"{urllib.parse.quote(user, safe='')}:{urllib.parse.quote(password, safe='')}"
+        f"@{parsed.netloc}"
+    )
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
+
+
+async def _record_stream(stream_url, duration_seconds):
+    """Record duration_seconds of stream_url to a freshly named MP4 in a private
+    temp dir, returning its path. The sub-stream's raw pixel dimensions (720x576)
+    don't match its actual 16:9 content and carry no aspect-ratio tag of their
+    own, so "-aspect 16:9" is passed at mux time to tag it without re-encoding
+    the video."""
+    fd, path = tempfile.mkstemp(dir=_clip_dir_path(), suffix=".mp4")
+    os.close(fd)
+    path = Path(path)
+
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-rtsp_transport",
+        "tcp",
+        "-i",
+        stream_url,
+        "-t",
+        str(duration_seconds),
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-aspect",
+        "16:9",
+        str(path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=duration_seconds + 15)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        path.unlink(missing_ok=True)
+        raise RuntimeError("ffmpeg timed out capturing motion clip") from None
+
+    if proc.returncode != 0:
+        path.unlink(missing_ok=True)
+        message = stderr.decode(errors="replace")
+        password = _onvif_pass()
+        for secret in (password, urllib.parse.quote(password, safe="")):
+            if secret:
+                message = message.replace(secret, "***")
+        raise RuntimeError(f"ffmpeg failed capturing motion clip: {message}")
+    return path
+
+
 async def capture_clip(duration_seconds=CLIP_DURATION_SECONDS):
     """Capture duration_seconds of the camera's live sub-stream (small/fast, good
     enough for a Telegram notification) to a freshly named MP4 in a private temp
     dir, and return its path — the caller is responsible for deleting it once
-    done. The sub-stream's raw pixel dimensions (720x576) don't match its actual
-    16:9 content and carry no aspect-ratio tag of their own, so "-aspect 16:9" is
-    passed at mux time to tag it without re-encoding the video."""
+    done."""
     camera = await _connect_camera()
     try:
-        media = await camera.create_media_service()
-        profiles = await media.GetProfiles()
-        if not profiles:
-            raise RuntimeError("Camera returned no ONVIF media profiles")
-        profile = next((p for p in profiles if "sub" in p.token.lower()), profiles[-1])
-
-        uri_resp = await media.GetStreamUri(
-            {
-                "StreamSetup": {"Stream": "RTP-Unicast", "Transport": {"Protocol": "RTSP"}},
-                "ProfileToken": profile.token,
-            }
-        )
-        user, password = _onvif_user(), _onvif_pass()
-        parsed = urllib.parse.urlsplit(uri_resp.Uri)
-        netloc = (
-            f"{urllib.parse.quote(user, safe='')}:{urllib.parse.quote(password, safe='')}"
-            f"@{parsed.netloc}"
-        )
-        stream_url = urllib.parse.urlunsplit(
-            (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
-        )
-
-        fd, path = tempfile.mkstemp(dir=_clip_dir_path(), suffix=".mp4")
-        os.close(fd)
-        path = Path(path)
-
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg",
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-rtsp_transport",
-            "tcp",
-            "-i",
-            stream_url,
-            "-t",
-            str(duration_seconds),
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-aspect",
-            "16:9",
-            str(path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=duration_seconds + 15)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            path.unlink(missing_ok=True)
-            raise RuntimeError("ffmpeg timed out capturing motion clip") from None
-
-        if proc.returncode != 0:
-            path.unlink(missing_ok=True)
-            message = stderr.decode(errors="replace")
-            for secret in (password, urllib.parse.quote(password, safe="")):
-                if secret:
-                    message = message.replace(secret, "***")
-            raise RuntimeError(f"ffmpeg failed capturing motion clip: {message}")
-        return path
+        stream_url = await _build_stream_url(camera)
+        return await _record_stream(stream_url, duration_seconds)
     finally:
         await camera.close()
 
