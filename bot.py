@@ -193,6 +193,21 @@ async def adddevice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _awaiting_device_nickname.pop(user_id, None)
     _pair_sessions.pop(user_id, None)
 
+    args = context.args or []
+    if args:
+        try:
+            mac = storage_bluetooth.normalize_mac(args[0])
+        except ValueError as exc:
+            await update.message.reply_text(f"Invalid MAC address: {exc}")
+            return
+        nickname = " ".join(args[1:]).strip()
+        if nickname:
+            await _pair_and_store(update, context, mac, nickname)
+            return
+        _awaiting_device_nickname[user_id] = {"mac": mac, "name": mac}
+        await update.message.reply_text(f"What nickname should I use for {mac}?")
+        return
+
     await update.message.reply_text("Scanning for nearby Bluetooth devices for 15 seconds...")
     try:
         devices = await presence.discover_devices()
@@ -236,19 +251,12 @@ async def _finish_device_pick(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-async def _save_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _pair_and_store(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, mac: str, nickname: str, display_name=None
+) -> None:
     user_id = update.effective_user.id
-    device = _awaiting_device_nickname.pop(user_id, None)
-    if device is None:
-        return
-    nickname = update.message.text.strip()
-    if not nickname:
-        await update.message.reply_text(
-            "The nickname can't be empty. Send /adddevice to try again."
-        )
-        return
-    mac = device["mac"]
-    await update.message.reply_text(f"Pairing with {device['name'] or mac}...")
+    name = display_name or mac
+    await update.message.reply_text(f"Pairing with {name}...")
 
     async def on_prompt(passkey):
         future = asyncio.get_running_loop().create_future()
@@ -273,6 +281,20 @@ async def _save_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text(
         f"Added {nickname} ({mac}). I'll track their presence from now on."
     )
+
+
+async def _save_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    device = _awaiting_device_nickname.pop(user_id, None)
+    if device is None:
+        return
+    nickname = update.message.text.strip()
+    if not nickname:
+        await update.message.reply_text(
+            "The nickname can't be empty. Send /adddevice to try again."
+        )
+        return
+    await _pair_and_store(update, context, device["mac"], nickname, display_name=device["name"])
 
 
 async def _answer_pair_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

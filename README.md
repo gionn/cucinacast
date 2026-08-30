@@ -141,7 +141,8 @@ manually against the real Nest Mini.
 - `/adddevice` — register a Bluetooth device to track. Runs a 15-second discovery
   scan, lists the devices found (known ones are filtered out), then asks for a
   nickname and pairs (confirming any passkey on your phone) and trusts the device.
-  The device can be removed again with `/rmdevice`.
+  Alternatively pass the MAC and nickname directly: `/adddevice <mac> <nickname>`
+  skips the scan. The device can be removed again with `/rmdevice`.
 - `/rmdevice <nickname|mac>` — stop tracking a device, by nickname or MAC address.
 - `/whoami` — reply with your Telegram user id, to put in `OWNER_USER_ID` /
   `ALLOWED_USER_IDS`.

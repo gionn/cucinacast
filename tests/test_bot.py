@@ -230,6 +230,55 @@ def test_adddevice_scans_and_lists_devices(monkeypatch):
     ]
 
 
+def test_adddevice_with_mac_and_nickname_pairs_directly(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    pair_mock = AsyncMock(return_value=(True, "Paired and trusted"))
+    monkeypatch.setattr(bot.presence, "pair_device", pair_mock)
+    discover = AsyncMock(return_value=[])
+    monkeypatch.setattr(bot.presence, "discover_devices", discover)
+    update = _update()
+    context = _context(args=["c2:06:19:03:24:4d", "gionn"])
+
+    _run(bot.adddevice(update, context))
+
+    pair_mock.assert_awaited_once()
+    assert pair_mock.await_args.args[0] == "C2:06:19:03:24:4D"
+    discover.assert_not_awaited()
+    assert storage_bluetooth.list_devices() == [
+        {
+            "mac": "C2:06:19:03:24:4D",
+            "nickname": "gionn",
+            "home": False,
+            "miss_count": 0,
+            "last_seen": None,
+        }
+    ]
+
+
+def test_adddevice_with_mac_only_asks_for_nickname(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    update = _update()
+    context = _context(args=["c2:06:19:03:24:4d"])
+
+    _run(bot.adddevice(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "What nickname should I use for C2:06:19:03:24:4D?" in reply
+    assert bot._awaiting_device_nickname[1]["mac"] == "C2:06:19:03:24:4D"
+
+
+def test_adddevice_rejects_invalid_mac(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    update = _update()
+    context = _context(args=["not-a-mac", "gionn"])
+
+    _run(bot.adddevice(update, context))
+
+    reply = update.message.reply_text.call_args.args[0]
+    assert "Invalid MAC" in reply
+    assert storage_bluetooth.list_devices() == []
+
+
 def test_adddevice_filters_known_devices(monkeypatch):
     storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
     discover = AsyncMock(
