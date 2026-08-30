@@ -89,6 +89,12 @@ against the real Nest Mini and confirming audio actually plays.
     detected — this is a known limitation, not something to "fix" reactively.
   - Device discovery (`_get_device`) retries a few times since local mDNS discovery is
     occasionally flaky.
+  - Each device connection gets a persistent zeroconf instance injected onto its
+    socket client (`Player._live_zconf`, created once and never closed). catt
+    hands every Chromecast the discovery browser's shared zeroconf and then
+    stops it, so without this pychromecast's background reconnect thread would
+    resolve services against a dead loop and spin on
+    `AssertionError: Zeroconf instance loop must be running` forever.
 - `bot.py` — python-telegram-bot wiring only; delegates all real work to
   `castyt.player`. Handlers (`play`, `announce`, `stop`) call into `Player` via
   `asyncio.to_thread(...)` — this is required, not just a style choice: pychromecast's

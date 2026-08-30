@@ -6,6 +6,7 @@ import random
 import threading
 import time
 
+import zeroconf
 from catt.api import CattDevice
 from catt.error import CastError
 from catt.stream_info import StreamInfo
@@ -77,6 +78,7 @@ class Player:
 
     def __init__(self):
         self._device = None
+        self._zconf = None
         self._lock = threading.Lock()
         self.query = None
         self.queue = []
@@ -85,17 +87,25 @@ class Player:
         self._track_started_at = 0
         self._interrupted_at_seconds = None
 
+    def _live_zconf(self):
+        """Return a persistent zeroconf instance, created once and never
+        closed. catt hands each Chromecast the browser's shared zeroconf and
+        then stops it, so pychromecast's reconnect thread would resolve
+        services against a dead loop and spin forever."""
+        if self._zconf is None:
+            self._zconf = zeroconf.Zeroconf()
+        return self._zconf
+
     def _ensure_device(self):
         if self._device is None:
             self._device = _get_device()
+            self._device._cast.socket_client.zconf = self._live_zconf()
             self._device._cast.media_controller.register_status_listener(self)
         return self._device
 
     def _reset_cast_device_locked(self):
         """Drop the current connection so the next play attempt rediscovers
-        the device from scratch. Needed because pychromecast's background
-        reconnect thread can get stuck spinning on a Zeroconf instance that
-        catt already stopped, silently keeping the connection dead forever."""
+        the device from scratch."""
         if self._device is not None:
             try:
                 self._device._cast.disconnect(blocking=False)

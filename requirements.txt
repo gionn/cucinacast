@@ -1,4 +1,5 @@
 catt
+zeroconf
 yt-dlp
 python-telegram-bot
 python-dotenv
