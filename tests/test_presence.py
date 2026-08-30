@@ -159,6 +159,23 @@ def test_probe_returns_false_on_timeout(monkeypatch):
     assert presence._probe("AA:BB:CC:DD:EE:FF") is False
 
 
+def test_probe_returns_false_when_always_empty(monkeypatch):
+    monkeypatch.setattr(presence, "PROBE_ATTEMPTS", 2)
+    monkeypatch.setattr(presence, "_run_checked", lambda cmd, timeout=15: "")
+    assert presence._probe("AA:BB:CC:DD:EE:FF") is False
+
+
+def test_probe_retries_after_empty_page(monkeypatch):
+    monkeypatch.setattr(presence, "PROBE_RETRY_DELAY_SECONDS", 0)
+    responses = iter(["", "", "Pixel 9"])
+
+    def flaky(cmd, timeout=15):
+        return next(responses)
+
+    monkeypatch.setattr(presence, "_run_checked", flaky)
+    assert presence._probe("AA:BB:CC:DD:EE:FF") is True
+
+
 def test_probe_returns_true_for_named_device(monkeypatch):
     monkeypatch.setattr(presence, "_run_checked", lambda cmd, timeout=15: "Pixel 9")
     assert presence._probe("AA:BB:CC:DD:EE:FF") is True

@@ -15,6 +15,8 @@ POLL_INTERVAL_SECONDS = 600
 MISS_THRESHOLD = 3
 DISCOVERY_TIMEOUT_SECONDS = 15
 PROBE_TIMEOUT_SECONDS = 8
+PROBE_ATTEMPTS = 3
+PROBE_RETRY_DELAY_SECONDS = 1
 PAIR_TIMEOUT_SECONDS = 180
 PASSKEY_CONFIRM_TIMEOUT_SECONDS = 90
 
@@ -219,12 +221,19 @@ async def pair_device(mac, on_prompt):
 
 def _probe(mac):
     """Probe a single device via hcitool name (paging). Works for any powered-on
-    phone whether or not it's paired/discoverable. Returns True if present."""
-    try:
-        out = _run_checked(("hcitool", "name", mac), timeout=PROBE_TIMEOUT_SECONDS)
-    except Exception:
-        return False
-    return out.strip() != ""
+    phone whether or not it's paired/discoverable. Retries since classic BT
+    paging is flaky — a page can come back empty for no good reason. Returns
+    True if present."""
+    for attempt in range(PROBE_ATTEMPTS):
+        out = ""
+        try:
+            out = _run_checked(("hcitool", "name", mac), timeout=PROBE_TIMEOUT_SECONDS)
+        except Exception:  # noqa: S110 - a failed page is expected, that's why we retry
+            pass
+        if out.strip():
+            return True
+        time.sleep(PROBE_RETRY_DELAY_SECONDS)
+    return False
 
 
 def _apply_miss(device):
