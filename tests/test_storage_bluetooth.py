@@ -58,6 +58,30 @@ def test_remove_device():
     assert storage_bluetooth.list_devices() == []
 
 
+def test_add_device_normalizes_mac():
+    storage_bluetooth.add_device("aa-bb-cc-dd-ee-ff", "Marta")
+    assert storage_bluetooth.list_devices()[0]["mac"] == "AA:BB:CC:DD:EE:FF"
+
+
+def test_remove_device_normalizes_mac():
+    storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
+    storage_bluetooth.remove_device("aa-bb-cc-dd-ee-ff")
+    assert storage_bluetooth.list_devices() == []
+
+
+def test_set_device_state_normalizes_mac():
+    storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
+    storage_bluetooth.set_device_state("aa-bb-cc-dd-ee-ff", True, 1, 1.0)
+    device = storage_bluetooth.list_devices()[0]
+    assert device["home"] is True
+    assert device["miss_count"] == 1
+
+
+def test_add_device_rejects_invalid_mac():
+    with pytest.raises(ValueError):
+        storage_bluetooth.add_device("not-a-mac", "Marta")
+
+
 def test_add_duplicate_mac_returns_false():
     assert storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta") is True
     assert storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Someone Else") is False

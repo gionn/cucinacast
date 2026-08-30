@@ -142,7 +142,9 @@ manually against the real Nest Mini.
   scan, lists the devices found (known ones are filtered out), then asks for a
   nickname and pairs (confirming any passkey on your phone) and trusts the device.
   Alternatively pass the MAC and nickname directly: `/adddevice <mac> <nickname>`
-  skips the scan. The device can be removed again with `/rmdevice`.
+  skips the scan. The device can be removed again with `/rmdevice`. During the
+  scan/nickname/pairing flow, reply `cancel` to abort and return to normal
+  commands.
 - `/rmdevice <nickname|mac>` — stop tracking a device, by nickname or MAC address.
 - `/whoami` — reply with your Telegram user id, to put in `OWNER_USER_ID` /
   `ALLOWED_USER_IDS`.

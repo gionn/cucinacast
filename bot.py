@@ -84,6 +84,8 @@ _awaiting_device_pick = {}
 _awaiting_device_nickname = {}
 _pair_sessions = {}
 
+_CANCEL_WORDS = {"cancel", "abort", "stop"}
+
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update):
@@ -161,6 +163,15 @@ async def _route_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     user_id = update.effective_user.id
+    if update.message.text.strip().lower() in _CANCEL_WORDS:
+        if user_id in _pair_sessions:
+            await _answer_pair_confirm(update, context)
+            return
+        if user_id in _awaiting_device_pick or user_id in _awaiting_device_nickname:
+            _awaiting_device_pick.pop(user_id, None)
+            _awaiting_device_nickname.pop(user_id, None)
+            await update.message.reply_text("Device setup cancelled.")
+            return
     if user_id in _awaiting_device_pick:
         await _finish_device_pick(update, context)
         return
@@ -310,7 +321,7 @@ async def _answer_pair_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
     if future is None or future.done():
         return
     reply = update.message.text.strip().lower()
-    if reply in ("no", "n", "cancel"):
+    if reply in ("no", "n") or reply in _CANCEL_WORDS:
         future.set_result(None)
     elif reply in ("yes", "y", "ok", "confirm"):
         future.set_result("yes")

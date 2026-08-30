@@ -462,6 +462,58 @@ def test_route_text_routes_pair_confirm(monkeypatch):
     assert _run(scenario()) == "yes"
 
 
+def test_route_text_cancel_clears_device_pick(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    bot._awaiting_device_pick[5] = {"devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}]}
+    update = _update(user_id=5, text="cancel")
+    context = _context()
+
+    _run(bot._route_text(update, context))
+
+    assert 5 not in bot._awaiting_device_pick
+    assert 5 not in bot._awaiting_device_nickname
+    reply = update.message.reply_text.call_args.args[0]
+    assert "cancelled" in reply.lower()
+
+
+def test_route_text_cancel_clears_device_nickname(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    bot._awaiting_device_nickname[5] = {"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}
+    update = _update(user_id=5, text="stop")
+    context = _context()
+
+    _run(bot._route_text(update, context))
+
+    assert 5 not in bot._awaiting_device_nickname
+    assert 5 not in bot._awaiting_device_pick
+    reply = update.message.reply_text.call_args.args[0]
+    assert "cancelled" in reply.lower()
+
+
+def test_route_text_cancel_cancels_pair_session(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+
+    async def scenario():
+        future = asyncio.get_running_loop().create_future()
+        bot._pair_sessions[5] = future
+        await bot._route_text(_update(user_id=5, text="abort"), _context())
+        return future.result()
+
+    assert _run(scenario()) is None
+
+
+def test_route_text_cancel_falls_through_outside_device_flow(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    do_play_mock = AsyncMock()
+    monkeypatch.setattr(bot, "_do_play", do_play_mock)
+    update = _update(user_id=5, text="cancel")
+    context = _context()
+
+    _run(bot._route_text(update, context))
+
+    do_play_mock.assert_awaited_once_with(update, context, "cancel")
+
+
 def test_athome_lists_devices(monkeypatch):
     monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
     storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")

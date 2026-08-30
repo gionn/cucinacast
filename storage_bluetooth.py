@@ -30,6 +30,7 @@ def normalize_mac(mac):
 
 
 def add_device(mac, nickname):
+    mac = normalize_mac(mac)
     with _connect() as conn:
         try:
             conn.execute(
@@ -42,6 +43,7 @@ def add_device(mac, nickname):
 
 
 def remove_device(mac):
+    mac = normalize_mac(mac)
     with _connect() as conn:
         conn.execute("DELETE FROM devices WHERE mac = ?", (mac,))
 
@@ -64,6 +66,7 @@ def list_devices():
 
 
 def set_device_state(mac, home, miss_count, last_seen):
+    mac = normalize_mac(mac)
     with _connect() as conn:
         conn.execute(
             "UPDATE devices SET home = ?, miss_count = ?, last_seen = ? WHERE mac = ?",
