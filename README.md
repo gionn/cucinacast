@@ -82,6 +82,23 @@ feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
   10pm-8am). Only affects automatic doorbell announcements from motion detection;
   the manual `/announce` command always works.
 
+Bluetooth presence tuning (all optional, defaults shown):
+
+- `BT_POLL_INTERVAL_SECONDS` — how often each registered device is probed
+  (default `600`, i.e. 10 minutes). Lower it for faster arrival/departure
+  notifications, at the cost of more Bluetooth paging traffic.
+- `BT_MISS_THRESHOLD` — consecutive missed polls before a home device flips to
+  away (default `3`). A single probe failure can't flap the state.
+- `BT_PROBE_TIMEOUT_SECONDS` — per-probe timeout for each `hcitool name` attempt
+  (default `8`).
+- `BT_PROBE_ATTEMPTS` — retries per poll cycle per device (default `3`),
+  `BT_PROBE_RETRY_DELAY_SECONDS` between them (default `1`).
+- `BT_DISCOVERY_TIMEOUT_SECONDS` — duration of the `/adddevice` discovery scan
+  (default `15`).
+- `BT_PAIR_TIMEOUT_SECONDS` — overall budget for an interactive pairing session
+  (default `180`), `BT_PASSKEY_CONFIRM_TIMEOUT_SECONDS` being how long the
+  bot waits for the owner to confirm a passkey (default `90`).
+
 ## Run the bot
 
 ```
@@ -182,17 +199,19 @@ list, then give it a nickname. The bot pairs (you confirm any passkey shown on t
 phone) and trusts the device. Pairing is only needed once, at registration; afterwards
 the phone's Bluetooth can stay on with it never being discoverable.
 
-Every 10 minutes the bot pages each registered device via `hcitool name <mac>`, which
+Every `BT_POLL_INTERVAL_SECONDS` (default 10 minutes) the bot pages each
+registered device via `hcitool name <mac>`, which
 works for any powered-on phone whether or not it's paired or discoverable. A device
-flips to "away" only after 3 consecutive missed polls (a single probe failure can't
-flap the state), and the miss count survives bot restarts. You can register several
+flips to "away" only after `BT_MISS_THRESHOLD` consecutive missed polls (default 3 —
+a single probe failure can't flap the state), and the miss count survives bot
+restarts. You can register several
 devices under one nickname (e.g. a phone and a tablet); each is tracked independently,
 but the owner gets at most one Telegram message per person per poll, and `/athome`
 groups the devices under their shared nickname. The owner is notified whenever someone
 arrives or leaves.
 
 The only real limitation: if a phone's Bluetooth is fully toggled off, the radio is
-silent and the bot will read it as "away" (after the 3-strike grace period). That's a
+silent and the bot will read it as "away" (after the `BT_MISS_THRESHOLD`-strike grace period). That's a
 property of Bluetooth itself, not of the bot.
 
 ## Known limitation

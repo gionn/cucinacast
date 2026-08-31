@@ -16,6 +16,33 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_env_int_returns_default_when_unset(monkeypatch):
+    monkeypatch.delenv("BT_POLL_INTERVAL_SECONDS", raising=False)
+    assert presence._env_int("BT_POLL_INTERVAL_SECONDS", 600) == 600
+
+
+def test_env_int_returns_default_when_blank(monkeypatch):
+    monkeypatch.setenv("BT_POLL_INTERVAL_SECONDS", "")
+    assert presence._env_int("BT_POLL_INTERVAL_SECONDS", 600) == 600
+
+
+def test_env_int_reads_override(monkeypatch):
+    monkeypatch.setenv("BT_POLL_INTERVAL_SECONDS", "120")
+    assert presence._env_int("BT_POLL_INTERVAL_SECONDS", 600) == 120
+
+
+def test_poll_interval_reads_env_lazily(monkeypatch):
+    monkeypatch.delenv("BT_POLL_INTERVAL_SECONDS", raising=False)
+    assert presence._poll_interval_seconds() == 600
+    monkeypatch.setenv("BT_POLL_INTERVAL_SECONDS", "300")
+    assert presence._poll_interval_seconds() == 300
+
+
+def test_miss_threshold_has_default(monkeypatch):
+    monkeypatch.delenv("BT_MISS_THRESHOLD", raising=False)
+    assert presence._miss_threshold() == 3
+
+
 def test_bluetooth_available_true_when_adapter_present(monkeypatch):
     monkeypatch.setattr(
         presence, "_run_checked", lambda cmd, timeout=15: "Devices:\n\thci0\tDC:A6:32:95:50:20"
@@ -160,13 +187,13 @@ def test_probe_returns_false_on_timeout(monkeypatch):
 
 
 def test_probe_returns_false_when_always_empty(monkeypatch):
-    monkeypatch.setattr(presence, "PROBE_ATTEMPTS", 2)
+    monkeypatch.setattr(presence, "_probe_attempts", lambda: 2)
     monkeypatch.setattr(presence, "_run_checked", lambda cmd, timeout=15: "")
     assert presence._probe("AA:BB:CC:DD:EE:FF") is False
 
 
 def test_probe_retries_after_empty_page(monkeypatch):
-    monkeypatch.setattr(presence, "PROBE_RETRY_DELAY_SECONDS", 0)
+    monkeypatch.setattr(presence, "_probe_retry_delay_seconds", lambda: 0)
     responses = iter(["", "", "Pixel 9"])
 
     def flaky(cmd, timeout=15):
@@ -416,7 +443,7 @@ def test_pair_logs_collapse_bluetoothctl_whitespace(monkeypatch, caplog):
 
 
 def test_pair_times_out_when_no_output(monkeypatch):
-    monkeypatch.setattr(presence, "PAIR_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(presence, "_pair_timeout_seconds", lambda: 0.1)
     proc, (paired, outcome) = _run_pairing(monkeypatch, [], hang=True)
     assert paired is False
     assert outcome == "timed out"
@@ -424,7 +451,7 @@ def test_pair_times_out_when_no_output(monkeypatch):
 
 
 def test_pair_times_out_waiting_for_user_confirmation(monkeypatch):
-    monkeypatch.setattr(presence, "PASSKEY_CONFIRM_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(presence, "_passkey_confirm_timeout_seconds", lambda: 0.1)
 
     async def _never_replies(passkey):
         await asyncio.sleep(3600)

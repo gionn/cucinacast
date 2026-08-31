@@ -43,7 +43,10 @@ systemd service only need `requirements.txt`.
 Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Optional:
 `NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
 `ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`, `LOG_LEVEL`,
-`HTTPX_LOG_LEVEL`.
+`HTTPX_LOG_LEVEL`, and the Bluetooth-presence tuning vars `BT_POLL_INTERVAL_SECONDS`,
+`BT_MISS_THRESHOLD`, `BT_PROBE_TIMEOUT_SECONDS`, `BT_PROBE_ATTEMPTS`,
+`BT_PROBE_RETRY_DELAY_SECONDS`, `BT_DISCOVERY_TIMEOUT_SECONDS`, `BT_PAIR_TIMEOUT_SECONDS`,
+`BT_PASSKEY_CONFIRM_TIMEOUT_SECONDS`.
 
 `pytest` covers the search-ranking/caching logic in `castyt.py`, the storage
 logic in `storage.py`/`storage_bluetooth.py`, and the presence state machine in

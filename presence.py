@@ -3,6 +3,7 @@ Telegram/TTS/casting dependency."""
 
 import asyncio
 import logging
+import os
 import re
 import time
 from contextlib import suppress
@@ -11,14 +12,43 @@ import storage_bluetooth
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 600
-MISS_THRESHOLD = 3
-DISCOVERY_TIMEOUT_SECONDS = 15
-PROBE_TIMEOUT_SECONDS = 8
-PROBE_ATTEMPTS = 3
-PROBE_RETRY_DELAY_SECONDS = 1
-PAIR_TIMEOUT_SECONDS = 180
-PASSKEY_CONFIRM_TIMEOUT_SECONDS = 90
+
+def _env_int(name, default):
+    value = os.environ.get(name)
+    return int(value) if value else default
+
+
+def _poll_interval_seconds():
+    return _env_int("BT_POLL_INTERVAL_SECONDS", 600)
+
+
+def _miss_threshold():
+    return _env_int("BT_MISS_THRESHOLD", 3)
+
+
+def _discovery_timeout_seconds():
+    return _env_int("BT_DISCOVERY_TIMEOUT_SECONDS", 15)
+
+
+def _probe_timeout_seconds():
+    return _env_int("BT_PROBE_TIMEOUT_SECONDS", 8)
+
+
+def _probe_attempts():
+    return _env_int("BT_PROBE_ATTEMPTS", 3)
+
+
+def _probe_retry_delay_seconds():
+    return _env_int("BT_PROBE_RETRY_DELAY_SECONDS", 1)
+
+
+def _pair_timeout_seconds():
+    return _env_int("BT_PAIR_TIMEOUT_SECONDS", 180)
+
+
+def _passkey_confirm_timeout_seconds():
+    return _env_int("BT_PASSKEY_CONFIRM_TIMEOUT_SECONDS", 90)
+
 
 _HCI_DEVICE_RE = re.compile(r"^\s*hci\d+\s+([0-9A-F:]+)$", re.MULTILINE)
 _NEW_DEVICE_RE = re.compile(r"\[NEW\] Device ([0-9A-F:]+)(?:\s+(.*))?$", re.MULTILINE)
@@ -62,7 +92,9 @@ def _run_checked(cmd, timeout=15, **kwargs):
     return proc.stdout
 
 
-async def _run_async(cmd, timeout=PROBE_TIMEOUT_SECONDS):
+async def _run_async(cmd, timeout=None):
+    if timeout is None:
+        timeout = _probe_timeout_seconds()
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -81,9 +113,11 @@ async def _run_async(cmd, timeout=PROBE_TIMEOUT_SECONDS):
     return stdout.decode(errors="replace")
 
 
-async def discover_devices(timeout_seconds=DISCOVERY_TIMEOUT_SECONDS):
+async def discover_devices(timeout_seconds=None):
     """Run a temporary bluetoothctl discovery scan and return discovered devices
     as a list of {"mac", "name"} dicts."""
+    if timeout_seconds is None:
+        timeout_seconds = _discovery_timeout_seconds()
     out = _strip_ansi(
         await _run_async(
             ("bluetoothctl", "--timeout", str(timeout_seconds), "scan", "on"),
@@ -127,7 +161,7 @@ async def _pair_interactive(mac, on_prompt):
         await _feed(proc, "default-agent")
         await _feed(proc, f"pair {mac}")
         while True:
-            remaining = PAIR_TIMEOUT_SECONDS - (time.monotonic() - start)
+            remaining = _pair_timeout_seconds() - (time.monotonic() - start)
             if remaining <= 0:
                 outcome = "timed out"
                 break
@@ -157,7 +191,7 @@ async def _pair_interactive(mac, on_prompt):
                 prompted = True
                 try:
                     reply = await asyncio.wait_for(
-                        on_prompt(passkey), timeout=PASSKEY_CONFIRM_TIMEOUT_SECONDS
+                        on_prompt(passkey), timeout=_passkey_confirm_timeout_seconds()
                     )
                 except asyncio.TimeoutError:
                     outcome = "timed out waiting for user confirmation"
@@ -225,28 +259,30 @@ def _probe(mac):
     phone whether or not it's paired/discoverable. Retries since classic BT
     paging is flaky — a page can come back empty for no good reason. Returns
     True if present."""
-    for attempt in range(PROBE_ATTEMPTS):
+    attempts = _probe_attempts()
+    for attempt in range(attempts):
         out = ""
         try:
-            out = _run_checked(("hcitool", "name", mac), timeout=PROBE_TIMEOUT_SECONDS)
+            out = _run_checked(("hcitool", "name", mac), timeout=_probe_timeout_seconds())
         except Exception:  # noqa: S110 - a failed page is expected, that's why we retry
             pass
         if out.strip():
             return True
-        if attempt < PROBE_ATTEMPTS - 1:
-            time.sleep(PROBE_RETRY_DELAY_SECONDS)
+        if attempt < attempts - 1:
+            time.sleep(_probe_retry_delay_seconds())
     return False
 
 
 def _apply_miss(device):
     """Apply one absent observation to a device's strike count and return the
     (new_home, miss_count, flipped) tuple. A home device flips to away only
-    after MISS_THRESHOLD consecutive misses; an already-away device stays away
-    and keeps counting (so it can flip home again only on a sighting)."""
+    after the configured miss threshold of consecutive misses; an already-away
+    device stays away and keeps counting (so it can flip home again only on a
+    sighting)."""
     miss_count = device["miss_count"] + 1
     home = device["home"]
     flipped = False
-    if home and miss_count >= MISS_THRESHOLD:
+    if home and miss_count >= _miss_threshold():
         home = False
         flipped = True
     return home, miss_count, flipped
@@ -290,10 +326,12 @@ def _collapse_transitions(transitions):
     return list(by_nickname.values())
 
 
-async def run_forever(on_transition, poll_interval_seconds=POLL_INTERVAL_SECONDS):
+async def run_forever(on_transition, poll_interval_seconds=None):
     """Poll presence every poll_interval_seconds and await
     on_transition(transition) for each home/away flip. Restarts on failure so a
     transient bluetooth hiccup can't kill the watch task."""
+    if poll_interval_seconds is None:
+        poll_interval_seconds = _poll_interval_seconds()
     while True:
         try:
             if not storage_bluetooth.list_devices():
