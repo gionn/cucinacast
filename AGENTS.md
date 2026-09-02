@@ -171,7 +171,7 @@ the real Nest Mini and confirming audio actually plays.
     scan, which only sees discoverable devices. `hcitool`/`bluetoothctl` run
     unprivileged: the HCI socket is accessible once the user is in the
     `bluetooth` group, and `bluetoothctl` talks over the BlueZ DBus API.
-  - `run_forever(on_transition)` polls every `POLL_INTERVAL_SECONDS` (10 min)
+  - `run_forever(on_transition)` polls every `BT_POLL_INTERVAL_SECONDS` (10 min)
     via `check_presence`, which probes each registered device through
     `asyncio.to_thread` (blocking subprocess I/O). A device's home/away state
     follows the latest probe result — flakiness is handled inside `_probe` by

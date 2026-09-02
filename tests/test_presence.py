@@ -31,6 +31,17 @@ def test_env_int_reads_override(monkeypatch):
     assert presence._env_int("BT_POLL_INTERVAL_SECONDS", 600) == 120
 
 
+def test_env_int_raises_below_minimum(monkeypatch):
+    monkeypatch.setenv("BT_PROBE_ATTEMPTS", "0")
+    with pytest.raises(ValueError):
+        presence._env_int("BT_PROBE_ATTEMPTS", 3, min_value=1)
+
+
+def test_env_int_allows_zero_retry_delay(monkeypatch):
+    monkeypatch.setenv("BT_PROBE_RETRY_DELAY_SECONDS", "0")
+    assert presence._env_int("BT_PROBE_RETRY_DELAY_SECONDS", 1, min_value=0) == 0
+
+
 def test_poll_interval_reads_env_lazily(monkeypatch):
     monkeypatch.delenv("BT_POLL_INTERVAL_SECONDS", raising=False)
     assert presence._poll_interval_seconds() == 600
@@ -423,5 +434,22 @@ def test_pair_times_out_waiting_for_user_confirmation(monkeypatch):
     proc, (paired, outcome) = _run_pairing(
         monkeypatch, [b"Confirm passkey 061796 (yes/no):\n"], on_prompt=_never_replies
     )
+    assert paired is False
+    assert outcome == "timed out waiting for user confirmation"
+
+
+def test_pair_confirm_wait_bounded_by_remaining_budget(monkeypatch):
+    monkeypatch.setattr(presence, "_pair_timeout_seconds", lambda: 0.2)
+    monkeypatch.setattr(presence, "_passkey_confirm_timeout_seconds", lambda: 90)
+    waited = []
+
+    async def _slow_reply(passkey):
+        waited.append(True)
+        await asyncio.sleep(3600)
+
+    proc, (paired, outcome) = _run_pairing(
+        monkeypatch, [b"Confirm passkey 061796 (yes/no):\n"], on_prompt=_slow_reply
+    )
+    assert waited
     assert paired is False
     assert outcome == "timed out waiting for user confirmation"

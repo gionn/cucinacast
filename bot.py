@@ -226,7 +226,10 @@ async def adddevice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"What nickname should I use for {mac}?")
         return
 
-    await update.message.reply_text("Scanning for nearby Bluetooth devices for 15 seconds...")
+    await update.message.reply_text(
+        "Scanning for nearby Bluetooth devices for "
+        f"{presence._discovery_timeout_seconds()} seconds..."
+    )
     try:
         devices = await presence.discover_devices()
     except Exception as exc:

@@ -13,37 +13,42 @@ import storage_bluetooth
 logger = logging.getLogger(__name__)
 
 
-def _env_int(name, default):
+def _env_int(name, default, min_value=None):
     value = os.environ.get(name)
-    return int(value) if value else default
+    if not value:
+        return default
+    parsed = int(value)
+    if min_value is not None and parsed < min_value:
+        raise ValueError(f"{name} must be at least {min_value}, got {parsed}")
+    return parsed
 
 
 def _poll_interval_seconds():
-    return _env_int("BT_POLL_INTERVAL_SECONDS", 600)
+    return _env_int("BT_POLL_INTERVAL_SECONDS", 600, min_value=1)
 
 
 def _discovery_timeout_seconds():
-    return _env_int("BT_DISCOVERY_TIMEOUT_SECONDS", 15)
+    return _env_int("BT_DISCOVERY_TIMEOUT_SECONDS", 15, min_value=1)
 
 
 def _probe_timeout_seconds():
-    return _env_int("BT_PROBE_TIMEOUT_SECONDS", 8)
+    return _env_int("BT_PROBE_TIMEOUT_SECONDS", 8, min_value=1)
 
 
 def _probe_attempts():
-    return _env_int("BT_PROBE_ATTEMPTS", 3)
+    return _env_int("BT_PROBE_ATTEMPTS", 3, min_value=1)
 
 
 def _probe_retry_delay_seconds():
-    return _env_int("BT_PROBE_RETRY_DELAY_SECONDS", 1)
+    return _env_int("BT_PROBE_RETRY_DELAY_SECONDS", 1, min_value=0)
 
 
 def _pair_timeout_seconds():
-    return _env_int("BT_PAIR_TIMEOUT_SECONDS", 180)
+    return _env_int("BT_PAIR_TIMEOUT_SECONDS", 180, min_value=1)
 
 
 def _passkey_confirm_timeout_seconds():
-    return _env_int("BT_PASSKEY_CONFIRM_TIMEOUT_SECONDS", 90)
+    return _env_int("BT_PASSKEY_CONFIRM_TIMEOUT_SECONDS", 90, min_value=1)
 
 
 _HCI_DEVICE_RE = re.compile(r"^\s*hci\d+\s+([0-9A-F:]+)$", re.MULTILINE)
@@ -187,7 +192,8 @@ async def _pair_interactive(mac, on_prompt):
                 prompted = True
                 try:
                     reply = await asyncio.wait_for(
-                        on_prompt(passkey), timeout=_passkey_confirm_timeout_seconds()
+                        on_prompt(passkey),
+                        timeout=min(_passkey_confirm_timeout_seconds(), remaining),
                     )
                 except asyncio.TimeoutError:
                     outcome = "timed out waiting for user confirmation"

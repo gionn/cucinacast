@@ -82,15 +82,18 @@ feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
   10pm-8am). Only affects automatic doorbell announcements from motion detection;
   the manual `/announce` command always works.
 
-Bluetooth presence tuning (all optional, defaults shown):
+Bluetooth presence tuning (all optional, defaults shown). Values are read at
+call time from the environment; a non-positive value for any of the intervals,
+timeouts, or attempts settings raises an error so a mistake is caught rather
+than silently misbehaving (`BT_PROBE_RETRY_DELAY_SECONDS` may be `0`):
 
 - `BT_POLL_INTERVAL_SECONDS` — how often each registered device is probed
   (default `600`, i.e. 10 minutes). Lower it for faster arrival/departure
   notifications, at the cost of more Bluetooth paging traffic.
 - `BT_PROBE_TIMEOUT_SECONDS` — per-probe timeout for each `hcitool name` attempt
   (default `8`).
-- `BT_PROBE_ATTEMPTS` — retries per poll cycle per device (default `3`),
-  `BT_PROBE_RETRY_DELAY_SECONDS` between them (default `1`).
+- `BT_PROBE_ATTEMPTS` — `hcitool name` attempts per poll cycle per device
+  (default `3`), `BT_PROBE_RETRY_DELAY_SECONDS` between them (default `1`).
 - `BT_DISCOVERY_TIMEOUT_SECONDS` — duration of the `/adddevice` discovery scan
   (default `15`).
 - `BT_PAIR_TIMEOUT_SECONDS` — overall budget for an interactive pairing session
@@ -200,8 +203,8 @@ the phone's Bluetooth can stay on with it never being discoverable.
 Every `BT_POLL_INTERVAL_SECONDS` (default 10 minutes) the bot pages each
 registered device via `hcitool name <mac>`, which
 works for any powered-on phone whether or not it's paired or discoverable. The page
-already includes its own retries
-(`BT_PROBE_ATTEMPTS` × `BT_PROBE_RETRY_DELAY_SECONDS`), and a device flips to
+already retries up to `BT_PROBE_ATTEMPTS` times, sleeping
+`BT_PROBE_RETRY_DELAY_SECONDS` between attempts, and a device flips to
 "away" whenever a full poll cycle gets no answer. You can register several
 devices under one nickname (e.g. a phone and a tablet); each is tracked independently,
 but the owner gets at most one Telegram message per person per poll, and `/athome`

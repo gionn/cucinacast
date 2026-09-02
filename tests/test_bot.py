@@ -220,6 +220,7 @@ def test_on_motion_announces_known_category(monkeypatch):
 
 def test_adddevice_scans_and_lists_devices(monkeypatch):
     monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    monkeypatch.setattr(bot.presence, "_discovery_timeout_seconds", lambda: 7)
     monkeypatch.setattr(bot.presence, "bluetooth_available", lambda: True)
     discover = AsyncMock(return_value=[{"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}])
     monkeypatch.setattr(bot.presence, "discover_devices", discover)
@@ -229,7 +230,7 @@ def test_adddevice_scans_and_lists_devices(monkeypatch):
     _run(bot.adddevice(update, context))
 
     replies = [call.args[0] for call in update.message.reply_text.await_args_list]
-    assert any("Scanning for nearby Bluetooth devices" in r for r in replies)
+    assert any("Scanning for nearby Bluetooth devices for 7 seconds" in r for r in replies)
     assert any("0. Pixel 9 (AA:BB:CC:DD:EE:FF)" in r for r in replies)
     assert bot._awaiting_device_pick[1]["devices"] == [
         {"mac": "AA:BB:CC:DD:EE:FF", "name": "Pixel 9"}
