@@ -9,7 +9,7 @@ import storage_bluetooth
 
 def _add_home_device(mac="AA:BB:CC:DD:EE:FF", nickname="Marta"):
     storage_bluetooth.add_device(mac, nickname)
-    storage_bluetooth.set_device_state(mac, True, 0, 0.0)
+    storage_bluetooth.set_device_state(mac, True, 0.0)
 
 
 def _run(coro):
@@ -36,11 +36,6 @@ def test_poll_interval_reads_env_lazily(monkeypatch):
     assert presence._poll_interval_seconds() == 600
     monkeypatch.setenv("BT_POLL_INTERVAL_SECONDS", "300")
     assert presence._poll_interval_seconds() == 300
-
-
-def test_miss_threshold_has_default(monkeypatch):
-    monkeypatch.delenv("BT_MISS_THRESHOLD", raising=False)
-    assert presence._miss_threshold() == 3
 
 
 def test_bluetooth_available_true_when_adapter_present(monkeypatch):
@@ -108,21 +103,6 @@ def test_discover_devices_uses_late_reported_name(monkeypatch):
     assert devices == [{"mac": "B0:4A:B4:B0:A0:27", "name": "moto g84"}]
 
 
-def test_apply_miss_increments_count():
-    home, miss_count, flipped = presence._apply_miss({"home": True, "miss_count": 0})
-    assert (home, miss_count, flipped) == (True, 1, False)
-
-
-def test_apply_miss_flips_to_away_at_threshold():
-    home, miss_count, flipped = presence._apply_miss({"home": True, "miss_count": 2})
-    assert (home, miss_count, flipped) == (False, 3, True)
-
-
-def test_apply_miss_keeps_away_device_away():
-    home, miss_count, flipped = presence._apply_miss({"home": False, "miss_count": 0})
-    assert (home, miss_count, flipped) == (False, 1, False)
-
-
 def test_check_presence_returns_empty_without_devices():
     assert _run(presence.check_presence()) == []
 
@@ -136,46 +116,30 @@ def test_check_presence_sighting_flips_home(monkeypatch):
     assert transitions == [{"nickname": "Marta", "mac": "AA:BB:CC:DD:EE:FF", "home": True}]
     device = storage_bluetooth.list_devices()[0]
     assert device["home"] is True
-    assert device["miss_count"] == 0
 
 
-def test_check_presence_away_after_three_misses(monkeypatch):
+def test_check_presence_miss_flips_away(monkeypatch):
     _add_home_device()
     monkeypatch.setattr(presence, "_probe", lambda mac: False)
 
-    assert _run(presence.check_presence()) == []
-    assert _run(presence.check_presence()) == []
     transitions = _run(presence.check_presence())
 
     assert transitions == [{"nickname": "Marta", "mac": "AA:BB:CC:DD:EE:FF", "home": False}]
     device = storage_bluetooth.list_devices()[0]
     assert device["home"] is False
-    assert device["miss_count"] == 3
 
 
-def test_check_presence_two_misses_stays_home(monkeypatch):
+def test_check_presence_recovery_flips_home_again(monkeypatch):
     _add_home_device()
     monkeypatch.setattr(presence, "_probe", lambda mac: False)
-
-    assert _run(presence.check_presence()) == []
-    assert _run(presence.check_presence()) == []
-
-    device = storage_bluetooth.list_devices()[0]
-    assert device["home"] is True
-    assert device["miss_count"] == 2
-
-
-def test_check_presence_sighting_resets_miss_count(monkeypatch):
-    _add_home_device()
-    storage_bluetooth.set_device_state("AA:BB:CC:DD:EE:FF", True, 2, 0.0)
+    _run(presence.check_presence())
     monkeypatch.setattr(presence, "_probe", lambda mac: True)
 
     transitions = _run(presence.check_presence())
 
-    assert transitions == []
+    assert transitions == [{"nickname": "Marta", "mac": "AA:BB:CC:DD:EE:FF", "home": True}]
     device = storage_bluetooth.list_devices()[0]
     assert device["home"] is True
-    assert device["miss_count"] == 0
 
 
 def test_probe_returns_false_on_timeout(monkeypatch):

@@ -271,7 +271,6 @@ def test_adddevice_with_mac_and_nickname_pairs_directly(monkeypatch):
             "mac": "C2:06:19:03:24:4D",
             "nickname": "gionn",
             "home": False,
-            "miss_count": 0,
             "last_seen": None,
         }
     ]
@@ -292,7 +291,7 @@ def test_adddevice_with_mac_only_asks_for_nickname(monkeypatch):
 def test_athome_shows_zero_last_seen_as_seen(monkeypatch):
     monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
     storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
-    storage_bluetooth.set_device_state("AA:BB:CC:DD:EE:FF", False, 0, 0.0)
+    storage_bluetooth.set_device_state("AA:BB:CC:DD:EE:FF", False, 0.0)
     update = _update()
     context = _context()
 
@@ -539,7 +538,7 @@ def test_route_text_cancel_falls_through_outside_device_flow(monkeypatch):
 def test_athome_lists_devices(monkeypatch):
     monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
     storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "Marta")
-    storage_bluetooth.set_device_state("AA:BB:CC:DD:EE:FF", True, 0, 0.0)
+    storage_bluetooth.set_device_state("AA:BB:CC:DD:EE:FF", True, 0.0)
     storage_bluetooth.add_device("11:22:33:44:55:66", "Bob")
     update = _update()
     context = _context()
@@ -556,7 +555,7 @@ def test_athome_lists_devices(monkeypatch):
 def test_athome_groups_multiple_devices_per_nickname(monkeypatch):
     monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
     storage_bluetooth.add_device("AA:BB:CC:DD:EE:FF", "gionn")
-    storage_bluetooth.set_device_state("AA:BB:CC:DD:EE:FF", True, 0, 0.0)
+    storage_bluetooth.set_device_state("AA:BB:CC:DD:EE:FF", True, 0.0)
     storage_bluetooth.add_device("11:22:33:44:55:66", "gionn")
     update = _update()
     context = _context()

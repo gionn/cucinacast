@@ -44,7 +44,7 @@ Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Option
 `NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
 `ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`, `LOG_LEVEL`,
 `HTTPX_LOG_LEVEL`, and the Bluetooth-presence tuning vars `BT_POLL_INTERVAL_SECONDS`,
-`BT_MISS_THRESHOLD`, `BT_PROBE_TIMEOUT_SECONDS`, `BT_PROBE_ATTEMPTS`,
+`BT_PROBE_TIMEOUT_SECONDS`, `BT_PROBE_ATTEMPTS`,
 `BT_PROBE_RETRY_DELAY_SECONDS`, `BT_DISCOVERY_TIMEOUT_SECONDS`, `BT_PAIR_TIMEOUT_SECONDS`,
 `BT_PASSKEY_CONFIRM_TIMEOUT_SECONDS`.
 
@@ -173,11 +173,11 @@ the real Nest Mini and confirming audio actually plays.
     `bluetooth` group, and `bluetoothctl` talks over the BlueZ DBus API.
   - `run_forever(on_transition)` polls every `POLL_INTERVAL_SECONDS` (10 min)
     via `check_presence`, which probes each registered device through
-    `asyncio.to_thread` (blocking subprocess I/O) and applies the 3-strike
-    rule: a device flips home→away only after `MISS_THRESHOLD` consecutive
-    misses, so a single probe failure (bluetooth hiccup) can't flap the state.
-    Miss counts persist through `storage_bluetooth`, so a bot restart doesn't
-    reset the countdown. Transitions (home/away flips) are collapsed to at most
+    `asyncio.to_thread` (blocking subprocess I/O). A device's home/away state
+    follows the latest probe result — flakiness is handled inside `_probe` by
+    `BT_PROBE_ATTEMPTS` retries with `BT_PROBE_RETRY_DELAY_SECONDS` between
+    them, not by a strike-count grace period. Transitions (home/away flips) are
+    collapsed to at most
     one per nickname per poll (`_collapse_transitions`, preferring home when a
     nickname has devices on both sides) and go to `on_transition(transition)`,
     which `bot.py` uses to notify the owner on Telegram. Restarts on failure
@@ -236,7 +236,7 @@ the real Nest Mini and confirming audio actually plays.
     long-held connection or extra locking, since `Player` already serializes its
     own calls into this module through `self._lock`.
 - `storage_bluetooth.py` — the `devices` table (registered MACs, nicknames, and
-  the persistent home/away + miss-count state) in its own module, same
+  the persistent home/away + last-seen state) in its own module, same
   short-lived-connection pattern as `storage.py`. `presence.py` is the only
   consumer. Kept separate so the play-history/cache module doesn't accumulate
   unrelated concerns.

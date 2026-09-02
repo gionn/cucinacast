@@ -87,8 +87,6 @@ Bluetooth presence tuning (all optional, defaults shown):
 - `BT_POLL_INTERVAL_SECONDS` — how often each registered device is probed
   (default `600`, i.e. 10 minutes). Lower it for faster arrival/departure
   notifications, at the cost of more Bluetooth paging traffic.
-- `BT_MISS_THRESHOLD` — consecutive missed polls before a home device flips to
-  away (default `3`). A single probe failure can't flap the state.
 - `BT_PROBE_TIMEOUT_SECONDS` — per-probe timeout for each `hcitool name` attempt
   (default `8`).
 - `BT_PROBE_ATTEMPTS` — retries per poll cycle per device (default `3`),
@@ -201,17 +199,17 @@ the phone's Bluetooth can stay on with it never being discoverable.
 
 Every `BT_POLL_INTERVAL_SECONDS` (default 10 minutes) the bot pages each
 registered device via `hcitool name <mac>`, which
-works for any powered-on phone whether or not it's paired or discoverable. A device
-flips to "away" only after `BT_MISS_THRESHOLD` consecutive missed polls (default 3 —
-a single probe failure can't flap the state), and the miss count survives bot
-restarts. You can register several
+works for any powered-on phone whether or not it's paired or discoverable. The page
+already includes its own retries
+(`BT_PROBE_ATTEMPTS` × `BT_PROBE_RETRY_DELAY_SECONDS`), and a device flips to
+"away" whenever a full poll cycle gets no answer. You can register several
 devices under one nickname (e.g. a phone and a tablet); each is tracked independently,
 but the owner gets at most one Telegram message per person per poll, and `/athome`
 groups the devices under their shared nickname. The owner is notified whenever someone
 arrives or leaves.
 
 The only real limitation: if a phone's Bluetooth is fully toggled off, the radio is
-silent and the bot will read it as "away" (after the `BT_MISS_THRESHOLD`-strike grace period). That's a
+silent and the bot will read it as "away". That's a
 property of Bluetooth itself, not of the bot.
 
 ## Known limitation

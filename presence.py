@@ -22,10 +22,6 @@ def _poll_interval_seconds():
     return _env_int("BT_POLL_INTERVAL_SECONDS", 600)
 
 
-def _miss_threshold():
-    return _env_int("BT_MISS_THRESHOLD", 3)
-
-
 def _discovery_timeout_seconds():
     return _env_int("BT_DISCOVERY_TIMEOUT_SECONDS", 15)
 
@@ -273,24 +269,11 @@ def _probe(mac):
     return False
 
 
-def _apply_miss(device):
-    """Apply one absent observation to a device's strike count and return the
-    (new_home, miss_count, flipped) tuple. A home device flips to away only
-    after the configured miss threshold of consecutive misses; an already-away
-    device stays away and keeps counting (so it can flip home again only on a
-    sighting)."""
-    miss_count = device["miss_count"] + 1
-    home = device["home"]
-    flipped = False
-    if home and miss_count >= _miss_threshold():
-        home = False
-        flipped = True
-    return home, miss_count, flipped
-
-
 async def check_presence():
     """Probe all registered devices once and return a list of transition dicts
-    {"nickname", "mac", "home"} for devices whose home/away state flipped."""
+    {"nickname", "mac", "home"} for devices whose home/away state flipped. A
+    device's state follows the latest probe result; a single failed cycle is
+    tolerated by _probe's own retries, not by a strike count."""
     transitions = []
     devices = storage_bluetooth.list_devices()
     if not devices:
@@ -299,16 +282,12 @@ async def check_presence():
         mac = device["mac"]
         present = await asyncio.to_thread(_probe, mac)
         now = time.time()
-        if present:
-            home, miss_count = True, 0
-        else:
-            home, miss_count, _ = _apply_miss(device)
-        if home and not device["home"]:
+        if present and not device["home"]:
             transitions.append({"nickname": device["nickname"], "mac": mac, "home": True})
-        elif not home and device["home"]:
+        elif not present and device["home"]:
             transitions.append({"nickname": device["nickname"], "mac": mac, "home": False})
         last_seen = now if present else device["last_seen"]
-        storage_bluetooth.set_device_state(mac, home, miss_count, last_seen)
+        storage_bluetooth.set_device_state(mac, present, last_seen)
     return transitions
 
 

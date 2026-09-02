@@ -14,7 +14,7 @@ def _connect():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS devices "
         "(mac TEXT PRIMARY KEY, nickname TEXT NOT NULL, added_at REAL NOT NULL, "
-        "home INTEGER NOT NULL DEFAULT 0, miss_count INTEGER NOT NULL DEFAULT 0, "
+        "home INTEGER NOT NULL DEFAULT 0, "
         "last_seen REAL)"
     )
     return conn
@@ -51,24 +51,23 @@ def remove_device(mac):
 def list_devices():
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT mac, nickname, home, miss_count, last_seen FROM devices ORDER BY nickname"
+            "SELECT mac, nickname, home, last_seen FROM devices ORDER BY nickname"
         ).fetchall()
     return [
         {
             "mac": row[0],
             "nickname": row[1],
             "home": bool(row[2]),
-            "miss_count": row[3],
-            "last_seen": row[4],
+            "last_seen": row[3],
         }
         for row in rows
     ]
 
 
-def set_device_state(mac, home, miss_count, last_seen):
+def set_device_state(mac, home, last_seen):
     mac = normalize_mac(mac)
     with _connect() as conn:
         conn.execute(
-            "UPDATE devices SET home = ?, miss_count = ?, last_seen = ? WHERE mac = ?",
-            (int(home), miss_count, last_seen, mac),
+            "UPDATE devices SET home = ?, last_seen = ? WHERE mac = ?",
+            (int(home), last_seen, mac),
         )
