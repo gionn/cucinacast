@@ -30,7 +30,6 @@ def _clip_dir_path():
 
 MOTION_TOPIC = "VideoSource/MotionAlarm"
 OBJECT_CLASS_TOPIC = "ObjectDetection/Object"
-DEBOUNCE_SECONDS = 30
 CLASSIFICATION_WAIT_SECONDS = 2
 SUBSCRIPTION_INTERVAL = datetime.timedelta(minutes=10)
 PULL_TIMEOUT = datetime.timedelta(seconds=10)
@@ -61,6 +60,10 @@ def _onvif_user():
 
 def _onvif_pass():
     return os.environ.get("ONVIF_PASS")
+
+
+def _debounce_seconds():
+    return int(os.environ.get("MOTION_DEBOUNCE_SECONDS", "30"))
 
 
 def motion_detection_enabled():
@@ -257,7 +260,7 @@ async def watch_motion(on_motion):
                     continue
                 if not any(item.Value.lower() == "true" for item in simple_items):
                     continue
-                if time.monotonic() - last_announced < DEBOUNCE_SECONDS:
+                if time.monotonic() - last_announced < _debounce_seconds():
                     logger.info("Motion detected, debounced")
                     continue
                 if pending_tasks:
