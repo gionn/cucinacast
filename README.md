@@ -2,8 +2,7 @@
 
 Telegram bot that searches YouTube and casts the top result to a Nest Mini (Chromecast).
 It can also speak a custom announcement on demand, with an ONVIF camera configured,
-announce motion (person/animal/vehicle) automatically, and, with a Bluetooth adapter,
-track who's home via their phones' presence.
+announce motion (person/animal/vehicle) automatically.
 
 Named after "cucina" (Italian for kitchen) — the Nest Mini it talks to lives in the
 kitchen.
@@ -82,24 +81,6 @@ feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
   10pm-8am). Only affects automatic doorbell announcements from motion detection;
   the manual `/announce` command always works.
 
-Bluetooth presence tuning (all optional, defaults shown). Values are read at
-call time from the environment; a non-positive value for any of the intervals,
-timeouts, or attempts settings raises an error so a mistake is caught rather
-than silently misbehaving (`BT_PROBE_RETRY_DELAY_SECONDS` may be `0`):
-
-- `BT_POLL_INTERVAL_SECONDS` — how often each registered device is probed
-  (default `600`, i.e. 10 minutes). Lower it for faster arrival/departure
-  notifications, at the cost of more Bluetooth paging traffic.
-- `BT_PROBE_TIMEOUT_SECONDS` — per-probe timeout for each `hcitool name` attempt
-  (default `8`).
-- `BT_PROBE_ATTEMPTS` — `hcitool name` attempts per poll cycle per device
-  (default `3`), `BT_PROBE_RETRY_DELAY_SECONDS` between them (default `1`).
-- `BT_DISCOVERY_TIMEOUT_SECONDS` — duration of the `/adddevice` discovery scan
-  (default `15`).
-- `BT_PAIR_TIMEOUT_SECONDS` — overall budget for an interactive pairing session
-  (default `180`), `BT_PASSKEY_CONFIRM_TIMEOUT_SECONDS` being how long the
-  bot waits for the owner to confirm a passkey (default `90`).
-
 ## Run the bot
 
 ```
@@ -132,12 +113,9 @@ sudo journalctl -u cucinacast -f
 
 `requirements-dev.txt` pulls in `requirements.txt` plus `pytest`. The test suite
 covers the search-ranking/caching logic in `castyt.py`, the play-history storage
-logic in `storage.py`, the Bluetooth-presence storage logic in
-`storage_bluetooth.py`, and the presence state machine in `presence.py`, with the
-actual `yt-dlp`/sqlite calls mocked/isolated and the `hcitool`/`bluetoothctl`
-subprocesses never invoked. Everything that touches the real Chromecast, camera,
-Bluetooth hardware, or Telegram API has no automated coverage — verify those
-manually against the real Nest Mini.
+logic in `storage.py`, with the actual `yt-dlp`/sqlite calls mocked/isolated.
+Everything that touches the real Chromecast, camera, or Telegram API has no
+automated coverage — verify those manually against the real Nest Mini.
 
 ## Bot commands
 
@@ -152,23 +130,11 @@ manually against the real Nest Mini.
   playback, then resume it from approximately where it left off. Same two-step prompt
   as `/play` if sent with no text.
 - `/stop` — stop playback and clear the queue.
-- `/athome` — list registered Bluetooth devices grouped by person, with each
-  device's home/away status and the last time each was seen. Multiple devices
-  can share a nickname (e.g. a phone and a tablet), and a person is shown as
-  home as long as any of their devices is in range.
-- `/adddevice` — register a Bluetooth device to track. Runs a 15-second discovery
-  scan, lists the devices found (known ones are filtered out), then asks for a
-  nickname and pairs (confirming any passkey on your phone) and trusts the device.
-  Alternatively pass the MAC and nickname directly: `/adddevice <mac> <nickname>`
-  skips the scan. The device can be removed again with `/rmdevice`. During the
-  scan/nickname/pairing flow, reply `cancel` to abort and return to normal
-  commands.
-- `/rmdevice <nickname|mac>` — stop tracking a device, by nickname or MAC address.
 - `/whoami` — reply with your Telegram user id, to put in `OWNER_USER_ID` /
   `ALLOWED_USER_IDS`.
 
 `/start` and `/whoami` are intentionally left out of the bot's `/`-menu (only the
-casting and presence commands show there) but still work when typed.
+casting commands show there) but still work when typed.
 
 ## Motion detection announcements
 
@@ -185,35 +151,6 @@ If `ffmpeg` is available on `PATH`, a short clip of the camera's live sub-stream
 also sent to the bot owner on Telegram alongside the spoken announcement. If
 `ffmpeg` is missing, this is skipped and only the audio announcement plays — motion
 detection itself is unaffected either way.
-
-## Bluetooth presence
-
-If the machine running the bot has a Bluetooth adapter, the bot can track who's home
-by monitoring registered phones. This needs `hcitool` and `bluetoothctl` installed and
-the service user in the `bluetooth` group (`sudo usermod -aG bluetooth <user>`); if
-your machine lacks a working adapter (or the group isn't set up), the feature is
-disabled with a warning at startup and `/athome`/`/adddevice`/`/rmdevice` report that
-no devices are registered.
-
-Register a device with `/adddevice` — the bot scans, you pick your phone from the
-list, then give it a nickname. The bot pairs (you confirm any passkey shown on the
-phone) and trusts the device. Pairing is only needed once, at registration; afterwards
-the phone's Bluetooth can stay on with it never being discoverable.
-
-Every `BT_POLL_INTERVAL_SECONDS` (default 10 minutes) the bot pages each
-registered device via `hcitool name <mac>`, which
-works for any powered-on phone whether or not it's paired or discoverable. The page
-already retries up to `BT_PROBE_ATTEMPTS` times, sleeping
-`BT_PROBE_RETRY_DELAY_SECONDS` between attempts, and a device flips to
-"away" whenever a full poll cycle gets no answer. You can register several
-devices under one nickname (e.g. a phone and a tablet); each is tracked independently,
-but the owner gets at most one Telegram message per person per poll, and `/athome`
-groups the devices under their shared nickname. The owner is notified whenever someone
-arrives or leaves.
-
-The only real limitation: if a phone's Bluetooth is fully toggled off, the radio is
-silent and the bot will read it as "away". That's a
-property of Bluetooth itself, not of the bot.
 
 ## Known limitation
 

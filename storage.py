@@ -18,6 +18,7 @@ def _connect():
         "CREATE TABLE IF NOT EXISTS search_cache "
         "(query TEXT, video_id TEXT, title TEXT, view_count INTEGER, fetched_at REAL)"
     )
+    conn.execute("DROP TABLE IF EXISTS devices")  # legacy Bluetooth-presence table
     return conn
 
 
