@@ -190,6 +190,10 @@ against the real Nest Mini and confirming audio actually plays.
     connectivity (where the detection trick itself would fail).
 - `storage.py` — sqlite persistence (`cucinacast.db`, gitignored) for both
   play history and the search-result cache, no Telegram/casting dependency.
+  - Schema creation and legacy-table cleanup live in `init_db()`, called once
+    at startup by `bot.main()` — `_connect()` stays free of DDL, since DDL
+    takes a heavier lock than normal reads/writes. `init_db()` also drops the
+    `devices` table left by the removed Bluetooth-presence feature.
   - `plays` table backs `record_play`/`recent_ids`: each query keeps only its
     `HISTORY_LIMIT` most recent plays (older rows for that query are deleted on
     each `record_play`), so recency-based exclusion needs no unbounded memory or

@@ -13,6 +13,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 import motion
 import phrases
+import storage
 from announce import synthesize_and_serve
 from castyt import player
 
@@ -327,6 +328,7 @@ async def post_stop(app: Application) -> None:
 
 
 def main() -> None:
+    storage.init_db()
     app = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)

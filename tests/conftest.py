@@ -11,6 +11,7 @@ import storage
 
 
 @pytest.fixture(autouse=True)
-def isolated_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-    monkeypatch.setattr(storage, "DB_PATH", db_path)
+def isolated_db(tmp_path_factory, monkeypatch):
+    db_dir = tmp_path_factory.mktemp("cucinacast-db")
+    monkeypatch.setattr(storage, "DB_PATH", db_dir / "test.db")
+    storage.init_db()
