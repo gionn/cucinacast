@@ -2,8 +2,7 @@
 
 Telegram bot that searches YouTube and casts the top result to a Nest Mini (Chromecast).
 It can also speak a custom announcement on demand, with an ONVIF camera configured,
-announce motion (person/animal/vehicle) automatically, and, with a Bluetooth adapter,
-track who's home via their phones' presence.
+announce motion (person/animal/vehicle) automatically.
 
 Named after "cucina" (Italian for kitchen) — the Nest Mini it talks to lives in the
 kitchen.
@@ -114,12 +113,9 @@ sudo journalctl -u cucinacast -f
 
 `requirements-dev.txt` pulls in `requirements.txt` plus `pytest`. The test suite
 covers the search-ranking/caching logic in `castyt.py`, the play-history storage
-logic in `storage.py`, the Bluetooth-presence storage logic in
-`storage_bluetooth.py`, and the presence state machine in `presence.py`, with the
-actual `yt-dlp`/sqlite calls mocked/isolated and the `hcitool`/`bluetoothctl`
-subprocesses never invoked. Everything that touches the real Chromecast, camera,
-Bluetooth hardware, or Telegram API has no automated coverage — verify those
-manually against the real Nest Mini.
+logic in `storage.py`, with the actual `yt-dlp`/sqlite calls mocked/isolated.
+Everything that touches the real Chromecast, camera, or Telegram API has no
+automated coverage — verify those manually against the real Nest Mini.
 
 ## Bot commands
 
@@ -134,23 +130,11 @@ manually against the real Nest Mini.
   playback, then resume it from approximately where it left off. Same two-step prompt
   as `/play` if sent with no text.
 - `/stop` — stop playback and clear the queue.
-- `/athome` — list registered Bluetooth devices grouped by person, with each
-  device's home/away status and the last time each was seen. Multiple devices
-  can share a nickname (e.g. a phone and a tablet), and a person is shown as
-  home as long as any of their devices is in range.
-- `/adddevice` — register a Bluetooth device to track. Runs a 15-second discovery
-  scan, lists the devices found (known ones are filtered out), then asks for a
-  nickname and pairs (confirming any passkey on your phone) and trusts the device.
-  Alternatively pass the MAC and nickname directly: `/adddevice <mac> <nickname>`
-  skips the scan. The device can be removed again with `/rmdevice`. During the
-  scan/nickname/pairing flow, reply `cancel` to abort and return to normal
-  commands.
-- `/rmdevice <nickname|mac>` — stop tracking a device, by nickname or MAC address.
 - `/whoami` — reply with your Telegram user id, to put in `OWNER_USER_ID` /
   `ALLOWED_USER_IDS`.
 
 `/start` and `/whoami` are intentionally left out of the bot's `/`-menu (only the
-casting and presence commands show there) but still work when typed.
+casting commands show there) but still work when typed.
 
 ## Motion detection announcements
 
@@ -167,33 +151,6 @@ If `ffmpeg` is available on `PATH`, a short clip of the camera's live sub-stream
 also sent to the bot owner on Telegram alongside the spoken announcement. If
 `ffmpeg` is missing, this is skipped and only the audio announcement plays — motion
 detection itself is unaffected either way.
-
-## Bluetooth presence
-
-If the machine running the bot has a Bluetooth adapter, the bot can track who's home
-by monitoring registered phones. This needs `hcitool` and `bluetoothctl` installed and
-the service user in the `bluetooth` group (`sudo usermod -aG bluetooth <user>`); if
-your machine lacks a working adapter (or the group isn't set up), the feature is
-disabled with a warning at startup and `/athome`/`/adddevice`/`/rmdevice` report that
-no devices are registered.
-
-Register a device with `/adddevice` — the bot scans, you pick your phone from the
-list, then give it a nickname. The bot pairs (you confirm any passkey shown on the
-phone) and trusts the device. Pairing is only needed once, at registration; afterwards
-the phone's Bluetooth can stay on with it never being discoverable.
-
-Every 10 minutes the bot pages each registered device via `hcitool name <mac>`, which
-works for any powered-on phone whether or not it's paired or discoverable. A device
-flips to "away" only after 3 consecutive missed polls (a single probe failure can't
-flap the state), and the miss count survives bot restarts. You can register several
-devices under one nickname (e.g. a phone and a tablet); each is tracked independently,
-but the owner gets at most one Telegram message per person per poll, and `/athome`
-groups the devices under their shared nickname. The owner is notified whenever someone
-arrives or leaves.
-
-The only real limitation: if a phone's Bluetooth is fully toggled off, the radio is
-silent and the bot will read it as "away" (after the 3-strike grace period). That's a
-property of Bluetooth itself, not of the bot.
 
 ## Known limitation
 

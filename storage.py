@@ -12,13 +12,20 @@ CACHE_TTL_SECONDS = 7 * 24 * 3600
 
 
 def _connect():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("CREATE TABLE IF NOT EXISTS plays (query TEXT, video_id TEXT, played_at REAL)")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS search_cache "
-        "(query TEXT, video_id TEXT, title TEXT, view_count INTEGER, fetched_at REAL)"
-    )
-    return conn
+    return sqlite3.connect(DB_PATH)
+
+
+def init_db():
+    """Create the schema and drop tables left by removed features. Call once at
+    startup so _connect() stays free of DDL, which takes a heavier lock than
+    normal reads/writes."""
+    with _connect() as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS plays (query TEXT, video_id TEXT, played_at REAL)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS search_cache "
+            "(query TEXT, video_id TEXT, title TEXT, view_count INTEGER, fetched_at REAL)"
+        )
+        conn.execute("DROP TABLE IF EXISTS devices")  # legacy Bluetooth-presence table
 
 
 def record_play(query, video_id):

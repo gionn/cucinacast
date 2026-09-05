@@ -8,11 +8,10 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
 os.environ.setdefault("OWNER_USER_ID", "1")
 
 import storage
-import storage_bluetooth
 
 
 @pytest.fixture(autouse=True)
-def isolated_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-    monkeypatch.setattr(storage, "DB_PATH", db_path)
-    monkeypatch.setattr(storage_bluetooth, "DB_PATH", db_path)
+def isolated_db(tmp_path_factory, monkeypatch):
+    db_dir = tmp_path_factory.mktemp("cucinacast-db")
+    monkeypatch.setattr(storage, "DB_PATH", db_dir / "test.db")
+    storage.init_db()

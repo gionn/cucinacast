@@ -1,4 +1,39 @@
+import sqlite3
+
 import storage
+
+
+def test_init_db_drops_legacy_devices_table():
+    with storage._connect() as conn:
+        conn.execute("CREATE TABLE devices (mac TEXT PRIMARY KEY, nickname TEXT NOT NULL)")
+    storage.init_db()
+    with storage._connect() as conn:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='devices'"
+        ).fetchall()
+    assert rows == []
+
+
+def test_init_db_is_idempotent():
+    storage.init_db()
+    storage.init_db()
+
+
+def test_init_db_cleans_each_database(monkeypatch, tmp_path):
+    for name in ("a.db", "b.db"):
+        path = tmp_path / name
+        db = sqlite3.connect(path)
+        db.execute("CREATE TABLE devices (mac TEXT PRIMARY KEY)")
+        db.close()
+        monkeypatch.setattr(storage, "DB_PATH", path)
+        storage.init_db()
+    for name in ("a.db", "b.db"):
+        conn = sqlite3.connect(tmp_path / name)
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        conn.close()
+        assert "devices" not in tables
 
 
 def test_recent_ids_empty_for_unknown_query():
