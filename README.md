@@ -107,6 +107,11 @@ sudo journalctl -u cucinacast -f
 
 ## Development
 
+The repo ships a `.devcontainer/` (Python 3.14, `ffmpeg`, host networking so mDNS
+Chromecast discovery and the ONVIF camera are reachable from the container).
+Opening it runs the setup below automatically — it creates the `.venv`, installs
+dev dependencies plus `pre-commit`, and registers the git hooks.
+
 ```
 ./.venv/bin/pip install -r requirements-dev.txt
 ./.venv/bin/python -m pytest
