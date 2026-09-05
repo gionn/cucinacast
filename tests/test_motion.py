@@ -110,6 +110,16 @@ def test_onvif_user_and_pass_respect_env(monkeypatch):
     assert motion._onvif_pass() == "secret"
 
 
+def test_debounce_seconds_defaults_to_30(monkeypatch):
+    monkeypatch.delenv("MOTION_DEBOUNCE_SECONDS", raising=False)
+    assert motion._debounce_seconds() == 30
+
+
+def test_debounce_seconds_respects_env_as_int(monkeypatch):
+    monkeypatch.setenv("MOTION_DEBOUNCE_SECONDS", "60")
+    assert motion._debounce_seconds() == 60
+
+
 def test_capture_clip_returns_path_and_encodes_credentials(monkeypatch, tmp_path):
     proc = _fake_proc(returncode=0)
     create_subprocess_mock, camera = _patch_capture_deps(monkeypatch, tmp_path, proc)

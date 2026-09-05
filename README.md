@@ -67,6 +67,8 @@ feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
   motion detection is disabled and the bot behaves exactly as without a camera.
 - `ONVIF_HOST` / `ONVIF_PORT` — the camera's address. If `ONVIF_HOST` is unset, the
   camera is auto-discovered via WS-Discovery on the LAN.
+- `MOTION_DEBOUNCE_SECONDS` — seconds between motion-triggered announcements
+  (default `30`).
 - `ANNOUNCE_PORT` — local port used to serve TTS announcement audio to the
   Chromecast (default `8765`).
 - `ANNOUNCE_HOST` — override the LAN IP advertised to the Chromecast for fetching

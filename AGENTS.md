@@ -41,8 +41,8 @@ systemd service only need `requirements.txt`.
 
 Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Optional:
 `NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
-`ONVIF_PORT`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`, `LOG_LEVEL`,
-`HTTPX_LOG_LEVEL`.
+`ONVIF_PORT`, `MOTION_DEBOUNCE_SECONDS`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`,
+`LOG_LEVEL`, `HTTPX_LOG_LEVEL`.
 
 `pytest` covers the search-ranking/caching logic in `castyt.py` and the storage
 logic in `storage.py` (`tests/`), with the actual `yt-dlp`/sqlite calls
@@ -140,9 +140,9 @@ against the real Nest Mini and confirming audio actually plays.
     classification recording/overlapping evaluations to one at a time), which
     waits `CLASSIFICATION_WAIT_SECONDS` before reading `last_object_class` and
     invoking `on_motion`.
-  - The debounce cooldown (`DEBOUNCE_SECONDS`) only starts once a recognized
-    category is resolved, not the moment raw motion fires — otherwise an
-    unclassified event (wind, shadows) would suppress a real one for 30s.
+  - The debounce cooldown (`MOTION_DEBOUNCE_SECONDS`, default 30) only starts once
+    a recognized category is resolved, not the moment raw motion fires — otherwise
+    an unclassified event (wind, shadows) would suppress a real one for 30s.
   - `run_forever` wraps `watch_motion` in a retry loop so a transient camera or
     network failure can't crash the bot process.
   - `watch_motion`'s `finally` cancels and awaits any still-pending

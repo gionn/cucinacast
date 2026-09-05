@@ -280,7 +280,7 @@ async def _on_motion(category: str) -> None:
     if _video_clips_enabled:
         # Run in the background rather than awaiting: a slow Telegram upload
         # would otherwise delay motion.py's caller from returning, extending
-        # the real debounce window past DEBOUNCE_SECONDS.
+        # the real debounce window past the configured MOTION_DEBOUNCE_SECONDS.
         task = asyncio.create_task(_send_motion_clip(text))
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
