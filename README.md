@@ -159,3 +159,17 @@ time). Drop your own `assets/person.mp3`, `assets/animal.mp3`, and
 Live YouTube streams (e.g. 24/7 lofi radio streams) resolve to an HLS manifest whose
 content type `yt-dlp`/`catt` can't always detect, which the Nest Mini fails to play.
 Regular (non-live) videos work reliably.
+
+## Credits
+
+The bundled motion-alert sound effects under `assets/` come from
+[BigSoundBank](https://bigsoundbank.com) by Joseph Sardin and are released under
+[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (public domain), so they
+are not covered by this project's Apache-2.0 license. Attribution isn't required under
+CC0, but is given here as a courtesy:
+
+- `person.mp3` — Doorbell house (`#0159`)
+- `animal.mp3` — Meow Cat (`#1898`)
+- `vehicle.mp3` — Recent Car Horn (`#0258`)
+
+Each was trimmed and loudness-normalized from the original recording.
