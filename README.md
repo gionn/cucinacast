@@ -69,6 +69,10 @@ feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
   camera is auto-discovered via WS-Discovery on the LAN.
 - `MOTION_DEBOUNCE_SECONDS` — seconds between motion-triggered sound effects
   (default `30`).
+- `MOTION_CLASSIFICATION_TIMEOUT_SECONDS` — how long to wait for the camera's
+  object classification after a motion event before treating it as unclassified
+  (default `10`). The classification often arrives a few seconds after the motion
+  alarm, so a short wait would drop it; raise this for slower cameras.
 - `ANNOUNCE_PORT` — local port used to serve announcement audio (both `/announce`
   speech and motion sound effects) to the Chromecast (default `8765`).
 - `ANNOUNCE_HOST` — override the LAN IP advertised to the Chromecast for fetching
@@ -148,6 +152,9 @@ camera for motion. Generic motion (wind, shadows, etc.) is ignored — an alert 
 happens when the camera's object classification identifies a person, animal, or
 vehicle, and a short sound effect is played on the Nest Mini (a different sound per
 category, bundled under `assets/`). Motion events are debounced (one sound per 30s).
+The bot waits for the camera's object classification (up to
+`MOTION_CLASSIFICATION_TIMEOUT_SECONDS`, default 10s) instead of reading it after a
+fixed short delay, so a classification that arrives late is still counted.
 Once the sound finishes, the interrupted track resumes from approximately where it
 was interrupted (within a few seconds, not frame-exact). Sounds are skipped entirely
 during quiet hours (`QUIET_HOURS_START`/`QUIET_HOURS_END`, default 10pm-8am local

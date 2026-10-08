@@ -16,7 +16,6 @@ DISCOVERY_TIMEOUT_SECONDS = 5
 
 MOTION_TOPIC = "VideoSource/MotionAlarm"
 OBJECT_CLASS_TOPIC = "ObjectDetection/Object"
-CLASSIFICATION_WAIT_SECONDS = 2
 SUBSCRIPTION_INTERVAL = datetime.timedelta(minutes=10)
 PULL_TIMEOUT = datetime.timedelta(seconds=10)
 PULL_MESSAGE_LIMIT = 10
@@ -50,6 +49,10 @@ def _onvif_pass():
 
 def _debounce_seconds():
     return int(os.environ.get("MOTION_DEBOUNCE_SECONDS", "30"))
+
+
+def _classification_timeout_seconds():
+    return int(os.environ.get("MOTION_CLASSIFICATION_TIMEOUT_SECONDS", "10"))
 
 
 def motion_detection_enabled():
@@ -112,18 +115,25 @@ async def watch_motion(on_motion):
 
     last_announced = 0
     last_object_class = ""
+    last_object_class_at = 0.0
+    pending_classification = None
     pending_tasks = set()
 
-    async def _announce_after_delay():
-        nonlocal last_object_class, last_announced
-        # Classification often arrives after its motion event, not before.
-        await asyncio.sleep(CLASSIFICATION_WAIT_SECONDS)
-        category = describe_object(last_object_class)
-        last_object_class = ""
+    async def _evaluate_motion(classification_future):
+        nonlocal last_announced
+        # The classification often arrives well after its motion event, so wait
+        # for it instead of reading a snapshot after a fixed short delay: a
+        # classification that lands late still resolves the future and counts.
+        try:
+            class_types = await asyncio.wait_for(
+                classification_future, _classification_timeout_seconds()
+            )
+        except asyncio.TimeoutError:
+            class_types = ""
+        category = describe_object(class_types)
         # Unclassified motion shouldn't block a real one from debouncing.
         if category != "unknown":
             last_announced = time.monotonic()
-        logger.info("Motion detected (%s)", category)
         try:
             await on_motion(category)
         except Exception:
@@ -143,10 +153,14 @@ async def watch_motion(on_motion):
 
                 if OBJECT_CLASS_TOPIC in topic:
                     class_types = items_repr.get("ClassTypes", "")
-                    # Only while an evaluation is pending, else it could leak into the next event.
-                    if class_types and pending_tasks:
+                    if class_types:
                         last_object_class = class_types
-                        logger.info("Object classified: %s", last_object_class)
+                        last_object_class_at = time.monotonic()
+                        logger.info("Object classified: %s", class_types)
+                        # Resolve the in-flight evaluation, if any; the pending
+                        # future is what gates a classification to its own event.
+                        if pending_classification is not None and not pending_classification.done():
+                            pending_classification.set_result(class_types)
                     continue
 
                 if MOTION_TOPIC not in topic:
@@ -158,7 +172,16 @@ async def watch_motion(on_motion):
                     continue
                 if pending_tasks:
                     continue
-                task = asyncio.create_task(_announce_after_delay())
+                classification_future = asyncio.get_running_loop().create_future()
+                # Some cameras emit the classification just before the alarm, so
+                # seed the future with a recent one rather than only waiting.
+                if last_object_class and (
+                    time.monotonic() - last_object_class_at < _classification_timeout_seconds()
+                ):
+                    classification_future.set_result(last_object_class)
+                    last_object_class = ""
+                pending_classification = classification_future
+                task = asyncio.create_task(_evaluate_motion(classification_future))
                 pending_tasks.add(task)
                 task.add_done_callback(pending_tasks.discard)
     finally:

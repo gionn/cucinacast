@@ -135,12 +135,17 @@ against the real Nest Mini and confirming audio actually plays.
     `create_pullpoint_manager`/`PullMessages` flow as the retired PoC).
     `discover_camera()` runs via `asyncio.to_thread` since it's blocking
     WS-Discovery I/O, same reason as `castyt.py`'s Chromecast discovery.
-  - Classification for an object can arrive after its motion event, not
-    before. A confirmed motion event schedules `_announce_after_delay`
-    (tracked in `pending_tasks`, both to avoid premature GC and to gate
-    classification recording/overlapping evaluations to one at a time), which
-    waits `CLASSIFICATION_WAIT_SECONDS` before reading `last_object_class` and
-    invoking `on_motion`.
+  - Classification for an object often arrives a few seconds after its motion
+    event (and occasionally just before). A confirmed motion event starts
+    `_evaluate_motion` (tracked in `pending_tasks`, both to avoid premature GC
+    and to gate overlapping evaluations to one at a time), which awaits a
+    per-event future resolved by the classification message, up to
+    `MOTION_CLASSIFICATION_TIMEOUT_SECONDS` (default 10) — so a classification
+    that lands late still counts, unlike a fixed-delay snapshot. The future is
+    seeded with a just-seen classification (within the same timeout) to cover
+    the before case. `last_object_class`/`last_object_class_at` hold only the
+    most recent value for that seeding; the pending future, not `pending_tasks`,
+    is what gates a classification to its own event.
   - The debounce cooldown (`MOTION_DEBOUNCE_SECONDS`, default 30) only starts once
     a recognized category is resolved, not the moment raw motion fires — otherwise
     an unclassified event (wind, shadows) would suppress a real one for 30s.

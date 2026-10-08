@@ -1,3 +1,8 @@
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+
 import motion
 
 
@@ -73,3 +78,136 @@ def test_debounce_seconds_defaults_to_30(monkeypatch):
 def test_debounce_seconds_respects_env_as_int(monkeypatch):
     monkeypatch.setenv("MOTION_DEBOUNCE_SECONDS", "60")
     assert motion._debounce_seconds() == 60
+
+
+def test_classification_timeout_defaults_to_10(monkeypatch):
+    monkeypatch.delenv("MOTION_CLASSIFICATION_TIMEOUT_SECONDS", raising=False)
+    assert motion._classification_timeout_seconds() == 10
+
+
+def test_classification_timeout_respects_env_as_int(monkeypatch):
+    monkeypatch.setenv("MOTION_CLASSIFICATION_TIMEOUT_SECONDS", "25")
+    assert motion._classification_timeout_seconds() == 25
+
+
+class _StopWatching(Exception):
+    pass
+
+
+def _motion_message():
+    data = SimpleNamespace(SimpleItem=[SimpleNamespace(Name="IsMotion", Value="true")])
+    return SimpleNamespace(
+        Topic=SimpleNamespace(_value_1="tns1:VideoSource/MotionAlarm"),
+        Message=SimpleNamespace(_value_1=SimpleNamespace(Data=data)),
+    )
+
+
+def _class_message(class_types):
+    data = SimpleNamespace(SimpleItem=[SimpleNamespace(Name="ClassTypes", Value=class_types)])
+    return SimpleNamespace(
+        Topic=SimpleNamespace(_value_1="tns1:ObjectDetection/Object"),
+        Message=SimpleNamespace(_value_1=SimpleNamespace(Data=data)),
+    )
+
+
+class _FakeService:
+    def __init__(self):
+        self.queue = asyncio.Queue()
+
+    async def PullMessages(self, params):
+        messages = await self.queue.get()
+        if messages is None:
+            raise _StopWatching()
+        return SimpleNamespace(NotificationMessage=messages)
+
+
+class _FakeManager:
+    def __init__(self, service):
+        self._service = service
+
+    def get_service(self):
+        return self._service
+
+    async def shutdown(self):
+        pass
+
+
+class _FakeCamera:
+    def __init__(self, manager):
+        self._manager = manager
+
+    async def create_pullpoint_manager(self, interval, lost_cb):
+        return self._manager
+
+    async def close(self):
+        pass
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+async def _drive(monkeypatch, timeout, steps):
+    """Run watch_motion against a fake ONVIF camera, feeding (delay, messages)
+    steps, and return the categories reported to on_motion."""
+    service = _FakeService()
+    camera = _FakeCamera(_FakeManager(service))
+
+    async def _fake_connect():
+        return camera
+
+    monkeypatch.setattr(motion, "_connect_camera", _fake_connect)
+    monkeypatch.setattr(motion, "_classification_timeout_seconds", lambda: timeout)
+
+    categories = []
+    seen = asyncio.Event()
+
+    async def on_motion(category):
+        categories.append(category)
+        seen.set()
+
+    task = asyncio.create_task(motion.watch_motion(on_motion))
+    await asyncio.sleep(0.01)  # let watch_motion subscribe
+
+    for delay, messages in steps:
+        if delay:
+            await asyncio.sleep(delay)
+        await service.queue.put(messages)
+
+    try:
+        await asyncio.wait_for(seen.wait(), timeout=timeout + 1)
+    except asyncio.TimeoutError:
+        pass
+
+    await service.queue.put(None)
+    with pytest.raises(_StopWatching):
+        await task
+    return categories
+
+
+def test_classification_arriving_after_the_old_two_second_window_still_alerts(monkeypatch):
+    # The old code slept a fixed 2s and read a snapshot, dropping anything later.
+    categories = _run(
+        _drive(
+            monkeypatch,
+            timeout=5,
+            steps=[(0, [_motion_message()]), (2.2, [_class_message("Human")])],
+        )
+    )
+    assert categories == ["person"]
+
+
+def test_classification_arriving_before_the_alarm_is_still_used(monkeypatch):
+    categories = _run(
+        _drive(
+            monkeypatch,
+            timeout=1,
+            steps=[(0, [_class_message("Human"), _motion_message()])],
+        )
+    )
+    assert categories == ["person"]
+
+
+def test_motion_without_classification_reports_unknown(monkeypatch):
+    categories = _run(_drive(monkeypatch, timeout=0.2, steps=[(0, [_motion_message()])]))
+    assert categories == ["unknown"]
