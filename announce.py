@@ -1,8 +1,9 @@
-"""Serve synthesized TTS announcements over HTTP for the Chromecast to fetch."""
+"""Serve announcement audio over HTTP for the Chromecast to fetch."""
 
 import http.server
 import logging
 import os
+import shutil
 import socket
 import threading
 
@@ -76,5 +77,13 @@ def synthesize_and_serve(text, lang="en"):
     """Synthesize text to speech, overwrite the shared audio file, ensure the HTTP
     server is running, and return a LAN-reachable URL for the Chromecast to fetch."""
     synthesize(text, lang=lang, path=DEFAULT_PATH)
+    _ensure_server()
+    return f"http://{_get_lan_ip()}:{_server_port}/{DEFAULT_PATH.name}"
+
+
+def serve_sound(path):
+    """Copy a bundled sound effect over the shared audio file, ensure the HTTP
+    server is running, and return a LAN-reachable URL for the Chromecast to fetch."""
+    shutil.copyfile(path, DEFAULT_PATH)
     _ensure_server()
     return f"http://{_get_lan_ip()}:{_server_port}/{DEFAULT_PATH.name}"

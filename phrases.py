@@ -1,25 +1,10 @@
-"""Localized wording for motion-triggered doorbell announcements."""
+"""Localized settings for announcements: TTS language and quiet hours."""
 
 import logging
 import os
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
-_ANNOUNCEMENTS = {
-    "en": {
-        "person": "Someone is at the door — I think it's a person.",
-        "animal": "Someone is at the door — I think it's an animal.",
-        "vehicle": "Someone is at the door — I think it's a vehicle.",
-        "unknown": "Someone is at the door.",
-    },
-    "it": {
-        "person": "Qualcuno è alla porta — credo sia una persona.",
-        "animal": "Qualcuno è alla porta — credo sia un animale.",
-        "vehicle": "Qualcuno è alla porta — credo sia un veicolo.",
-        "unknown": "Qualcuno è alla porta.",
-    },
-}
 
 
 def tts_lang():
@@ -53,11 +38,3 @@ def in_quiet_hours(now=None):
     if start > end:
         return hour >= start or hour < end
     return start <= hour < end
-
-
-def announcement_text(category):
-    """Return the announcement sentence for a motion category
-    ("person"/"animal"/"vehicle"/"unknown") in TTS_LANG, falling back to English
-    wording for unconfigured languages."""
-    phrases = _ANNOUNCEMENTS.get(tts_lang(), _ANNOUNCEMENTS["en"])
-    return phrases.get(category, phrases["unknown"])

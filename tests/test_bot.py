@@ -180,33 +180,35 @@ def test_error_handler_ignores_generic_exception(monkeypatch):
 
 
 def test_on_motion_skips_unknown_category(monkeypatch):
-    synth_mock = AsyncMock()
-    monkeypatch.setattr(bot, "synthesize_and_serve", synth_mock)
+    serve_mock = Mock()
+    monkeypatch.setattr(bot, "serve_sound", serve_mock)
 
     _run(bot._on_motion("unknown"))
 
-    synth_mock.assert_not_called()
+    serve_mock.assert_not_called()
 
 
 def test_on_motion_skips_during_quiet_hours(monkeypatch):
     monkeypatch.setattr(bot.phrases, "in_quiet_hours", lambda: True)
-    synth_mock = AsyncMock()
-    monkeypatch.setattr(bot, "synthesize_and_serve", synth_mock)
+    serve_mock = Mock()
+    monkeypatch.setattr(bot, "serve_sound", serve_mock)
 
     _run(bot._on_motion("person"))
 
-    synth_mock.assert_not_called()
+    serve_mock.assert_not_called()
 
 
-def test_on_motion_announces_known_category(monkeypatch):
+def test_on_motion_plays_category_sound(monkeypatch):
     monkeypatch.setattr(bot.phrases, "in_quiet_hours", lambda: False)
-    monkeypatch.setattr(bot, "synthesize_and_serve", lambda text, lang: "http://host/announce.mp3")
+    serve_mock = Mock(return_value="http://host/motion.mp3")
+    monkeypatch.setattr(bot, "serve_sound", serve_mock)
     announce_mock = Mock()
     monkeypatch.setattr(bot.player, "announce", announce_mock)
 
     _run(bot._on_motion("person"))
 
-    announce_mock.assert_called_once_with("http://host/announce.mp3")
+    serve_mock.assert_called_once_with(bot.sounds.sound_path("person"))
+    announce_mock.assert_called_once_with("http://host/motion.mp3")
 
 
 def test_route_text_cancel_falls_through_outside_device_flow(monkeypatch):
