@@ -144,15 +144,16 @@ against the real Nest Mini and confirming audio actually plays.
     that lands late still counts, unlike a fixed-delay snapshot. The future is
     seeded with a just-seen classification (within the same timeout) to cover
     the before case. `last_object_class`/`last_object_class_at` hold only the
-    most recent value for that seeding; the pending future, not `pending_tasks`,
-    is what gates a classification to its own event.
+    most recent value for that seeding; a classification that resolves an
+    in-flight event is cleared so it can't seed a later alarm, and the pending
+    future, not `pending_tasks`, is what gates a classification to its own event.
   - The debounce cooldown (`MOTION_DEBOUNCE_SECONDS`, default 30) only starts once
     a recognized category is resolved, not the moment raw motion fires — otherwise
     an unclassified event (wind, shadows) would suppress a real one for 30s.
   - `run_forever` wraps `watch_motion` in a retry loop so a transient camera or
     network failure can't crash the bot process.
   - `watch_motion`'s `finally` cancels and awaits any still-pending
-    `_announce_after_delay` task before shutting down the subscription — those
+    `_evaluate_motion` task before shutting down the subscription — those
     tasks are independent children of the loop, not of `watch_motion`, so
     without this an in-flight one could still fire an announcement after a
     subscription failure or shutdown has already moved on to a new watcher.

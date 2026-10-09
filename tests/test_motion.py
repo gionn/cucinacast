@@ -147,9 +147,10 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-async def _drive(monkeypatch, timeout, steps):
+async def _drive(monkeypatch, timeout, steps, alerts=1):
     """Run watch_motion against a fake ONVIF camera, feeding (delay, messages)
-    steps, and return the categories reported to on_motion."""
+    steps, and return the categories reported to on_motion once `alerts` have
+    been reported (or the drive times out)."""
     service = _FakeService()
     camera = _FakeCamera(_FakeManager(service))
 
@@ -164,7 +165,8 @@ async def _drive(monkeypatch, timeout, steps):
 
     async def on_motion(category):
         categories.append(category)
-        seen.set()
+        if len(categories) >= alerts:
+            seen.set()
 
     task = asyncio.create_task(motion.watch_motion(on_motion))
     await asyncio.sleep(0.01)  # let watch_motion subscribe
@@ -211,3 +213,22 @@ def test_classification_arriving_before_the_alarm_is_still_used(monkeypatch):
 def test_motion_without_classification_reports_unknown(monkeypatch):
     categories = _run(_drive(monkeypatch, timeout=0.2, steps=[(0, [_motion_message()])]))
     assert categories == ["unknown"]
+
+
+def test_consumed_classification_is_not_reused_by_a_later_alarm(monkeypatch):
+    # A classification that resolved one event must not seed the next one, or a
+    # later unclassified alarm would falsely report the previous category.
+    monkeypatch.setenv("MOTION_DEBOUNCE_SECONDS", "0")
+    categories = _run(
+        _drive(
+            monkeypatch,
+            timeout=5,
+            steps=[
+                (0, [_motion_message()]),
+                (0.1, [_class_message("Human")]),
+                (0.3, [_motion_message()]),
+            ],
+            alerts=2,
+        )
+    )
+    assert categories == ["person", "unknown"]

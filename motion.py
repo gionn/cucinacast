@@ -161,6 +161,9 @@ async def watch_motion(on_motion):
                         # future is what gates a classification to its own event.
                         if pending_classification is not None and not pending_classification.done():
                             pending_classification.set_result(class_types)
+                            # Consumed by this event: don't let it seed a later
+                            # alarm (the seeding path clears it the same way).
+                            last_object_class = ""
                     continue
 
                 if MOTION_TOPIC not in topic:
