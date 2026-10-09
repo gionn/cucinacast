@@ -260,7 +260,6 @@ async def _play_motion_sound(category: str) -> None:
 async def _on_motion(category: str) -> None:
     logger.info("Motion detected: %s", category)
     if category == "unknown":
-        logger.info("Unclassified motion, skipping sound")
         return
     if phrases.in_quiet_hours():
         logger.info("Quiet hours active, skipping motion sound (%s)", category)
