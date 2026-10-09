@@ -1,8 +1,8 @@
 # CucinaCast
 
 Telegram bot that searches YouTube and casts the top result to a Nest Mini (Chromecast).
-It can also speak a custom announcement on demand, with an ONVIF camera configured,
-announce motion (person/animal/vehicle) automatically.
+It can also speak a custom announcement on demand, and with an ONVIF camera configured,
+play a sound effect when it detects motion (person/animal/vehicle) automatically.
 
 Named after "cucina" (Italian for kitchen) — the Nest Mini it talks to lives in the
 kitchen.
@@ -60,27 +60,25 @@ Bot / casting:
   `python-telegram-bot` for polling). Defaults to `WARNING` to avoid flooding the logs
   with a line per poll request; set to `INFO` or `DEBUG` for verbose HTTP logging.
 
-Motion detection / doorbell announcements (see below — all optional, and the
+Motion detection / doorbell alerts (see below — all optional, and the
 feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
 
 - `ONVIF_USER` / `ONVIF_PASS` — ONVIF camera credentials. If either is unset,
   motion detection is disabled and the bot behaves exactly as without a camera.
 - `ONVIF_HOST` / `ONVIF_PORT` — the camera's address. If `ONVIF_HOST` is unset, the
   camera is auto-discovered via WS-Discovery on the LAN.
-- `MOTION_DEBOUNCE_SECONDS` — seconds between motion-triggered announcements
+- `MOTION_DEBOUNCE_SECONDS` — seconds between motion-triggered sound effects
   (default `30`).
-- `ANNOUNCE_PORT` — local port used to serve TTS announcement audio to the
-  Chromecast (default `8765`).
+- `ANNOUNCE_PORT` — local port used to serve announcement audio (both `/announce`
+  speech and motion sound effects) to the Chromecast (default `8765`).
 - `ANNOUNCE_HOST` — override the LAN IP advertised to the Chromecast for fetching
   announcement audio (auto-detected by default; only needed on multi-NIC
   machines).
-- `TTS_LANG` — language for announcement speech and wording (default `en`; `it` is
-  also supported). Any other `gTTS`-supported language code works for speech, but
-  the announcement wording itself is only translated for `en`/`it` — falls back to
-  English wording for other codes.
+- `TTS_LANG` — language for `/announce` speech (default `en`). Any `gTTS`-supported
+  language code works.
 - `QUIET_HOURS_START` / `QUIET_HOURS_END` — local-time hours (0-23) defining a window
-  in which motion-triggered announcements are suppressed (default `22`/`8`, i.e.
-  10pm-8am). Only affects automatic doorbell announcements from motion detection;
+  in which motion-triggered sound effects are suppressed (default `22`/`8`, i.e.
+  10pm-8am). Only affects automatic alerts from motion detection;
   the manual `/announce` command always works.
 
 ## Run the bot
@@ -108,7 +106,7 @@ sudo journalctl -u cucinacast -f
 
 ## Development
 
-The repo ships a `.devcontainer/` (Python 3.14, `ffmpeg`, host networking so mDNS
+The repo ships a `.devcontainer/` (Python 3.14, host networking so mDNS
 Chromecast discovery and the ONVIF camera are reachable from the container).
 Opening it runs the setup below automatically — it creates the `.venv`, installs
 dev dependencies plus `pre-commit`, and registers the git hooks.
@@ -143,24 +141,35 @@ automated coverage — verify those manually against the real Nest Mini.
 `/start` and `/whoami` are intentionally left out of the bot's `/`-menu (only the
 casting commands show there) but still work when typed.
 
-## Motion detection announcements
+## Motion detection
 
 If `ONVIF_USER` and `ONVIF_PASS` are set, the bot watches the configured ONVIF
-camera for motion. Generic motion (wind, shadows, etc.) is ignored — an
-announcement only happens when the camera's object classification identifies a
-person, animal, or vehicle, and the announcement names which one it is. Motion
-events are debounced (one announcement per 30s). Once the announcement finishes,
-the interrupted track resumes from approximately where it was interrupted (within
-a few seconds, not frame-exact). Announcements are skipped entirely during quiet
-hours (`QUIET_HOURS_START`/`QUIET_HOURS_END`, default 10pm-8am local time).
-
-If `ffmpeg` is available on `PATH`, a short clip of the camera's live sub-stream is
-also sent to the bot owner on Telegram alongside the spoken announcement. If
-`ffmpeg` is missing, this is skipped and only the audio announcement plays — motion
-detection itself is unaffected either way.
+camera for motion. Generic motion (wind, shadows, etc.) is ignored — an alert only
+happens when the camera's object classification identifies a person, animal, or
+vehicle, and a short sound effect is played on the Nest Mini (a different sound per
+category, bundled under `assets/`). Motion events are debounced (one sound per 30s).
+Once the sound finishes, the interrupted track resumes from approximately where it
+was interrupted (within a few seconds, not frame-exact). Sounds are skipped entirely
+during quiet hours (`QUIET_HOURS_START`/`QUIET_HOURS_END`, default 10pm-8am local
+time). Drop your own `assets/person.mp3`, `assets/animal.mp3`, and
+`assets/vehicle.mp3` to customize the sounds.
 
 ## Known limitation
 
 Live YouTube streams (e.g. 24/7 lofi radio streams) resolve to an HLS manifest whose
 content type `yt-dlp`/`catt` can't always detect, which the Nest Mini fails to play.
 Regular (non-live) videos work reliably.
+
+## Credits
+
+The bundled motion-alert sound effects under `assets/` come from
+[BigSoundBank](https://bigsoundbank.com) by Joseph Sardin and are released under
+[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (public domain), so they
+are not covered by this project's Apache-2.0 license. Attribution isn't required under
+CC0, but is given here as a courtesy:
+
+- `person.mp3` — Doorbell house (`#0159`)
+- `animal.mp3` — Meow Cat (`#1898`)
+- `vehicle.mp3` — Recent Car Horn (`#0258`)
+
+Each was trimmed and loudness-normalized from the original recording.

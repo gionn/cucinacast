@@ -26,7 +26,7 @@ python3 -m venv .venv
 ./.venv/bin/python tts.py "some announcement text"
 
 # syntax-check after edits
-./.venv/bin/python -m py_compile bot.py castyt.py motion.py announce.py tts.py phrases.py storage.py
+./.venv/bin/python -m py_compile bot.py castyt.py motion.py announce.py tts.py phrases.py storage.py sounds.py
 
 # run the test suite (unit tests for search ranking/caching and play-history
 # storage logic; everything else is still verified manually, see below)
@@ -123,11 +123,12 @@ against the real Nest Mini and confirming audio actually plays.
     configured are unaffected. `_on_motion` skips unclassified
     ("unknown"-category) motion entirely — generic motion is usually uninteresting
     (wind, shadows, etc.), so only motion the camera actually classified (person/
-    animal/vehicle) gets announced. It also skips announcing during quiet hours
+    animal/vehicle) triggers an alert. It also skips alerting during quiet hours
     (`phrases.in_quiet_hours()`) — this check only gates the automatic motion path,
-    not the manual `/announce` command. Otherwise it looks up the wording via
-    `phrases.announcement_text` and casts it via `announce.synthesize_and_serve` +
-    `player.announce` (both via `asyncio.to_thread`, same pattern as `play`/`stop`).
+    not the manual `/announce` command. Otherwise it plays the category's bundled
+    sound effect via `announce.serve_sound` + `player.announce` (both via
+    `asyncio.to_thread`, same pattern as `play`/`stop`). The alert is audio-only:
+    a sound effect per category, no speech and no Telegram clip.
 - `motion.py` — ONVIF motion-detection logic, no Telegram/TTS/casting dependency
   (mirrors `castyt.py`'s separation).
   - `watch_motion(on_motion)` subscribes to the camera's pullpoint events (same
@@ -153,27 +154,32 @@ against the real Nest Mini and confirming audio actually plays.
   - `motion_detection_enabled()` gates the whole feature on `ONVIF_USER`/
     `ONVIF_PASS` being set — both are optional at the bot level.
   - `describe_object` returns a language-neutral category
-    ("person"/"animal"/"vehicle"/"unknown"), not wording — localization into an
-    actual sentence is `phrases.py`'s job, keeping `motion.py` free of any
-    TTS/language concern.
-- `phrases.py` — localized wording for doorbell announcements. `TTS_LANG` (env,
-  default `en`) selects the language; `announcement_text(category)` maps a
-  `motion.describe_object` category to a sentence in that language, falling back
-  to English wording for unconfigured `TTS_LANG` values. Kept separate from
-  `bot.py` (wiring only) and from `motion.py`/`tts.py` (language-agnostic) so
-  adding a language/wording is a one-file change. `in_quiet_hours(now=None)` checks
-  the current local hour against `QUIET_HOURS_START`/`QUIET_HOURS_END` (default
-  `22`/`8`), handling the overnight wraparound; `bot.py`'s `_on_motion` uses it to
-  suppress motion-triggered announcements at night.
+    ("person"/"animal"/"vehicle"/"unknown"), not wording — `sounds.py` maps it to
+    a bundled sound effect and `phrases.py` handles quiet-hour gating, keeping
+    `motion.py` free of any TTS/language/audio concern.
+- `phrases.py` — announcement settings: `TTS_LANG` (env, default `en`) selects the
+  language used by `/announce`'s gTTS speech; `in_quiet_hours(now=None)` checks the
+  current local hour against `QUIET_HOURS_START`/`QUIET_HOURS_END` (default `22`/`8`),
+  handling the overnight wraparound; `bot.py`'s `_on_motion` uses it to suppress
+  motion-triggered sound effects at night. Kept separate from `bot.py` (wiring only)
+  and from the language-agnostic `motion.py`/`tts.py`/`sounds.py`.
+- `sounds.py` — maps a `motion.describe_object` category
+  ("person"/"animal"/"vehicle") to a bundled sound-effect file under `assets/`,
+  returning `None` for categories with no sound (`sound_path`). The assets are
+  short mp3s (placeholders generated with `ffmpeg`; interchangeable as long as the
+  filenames stay). Kept separate from `announce.py` so serving stays free of asset
+  knowledge, and language-neutral like `motion.py`.
 - `tts.py` — TTS synthesis only (via `gTTS`, chosen since the project already
   requires internet for YouTube), no serving/casting dependency. `synthesize(text,
   lang, path)` saves an MP3 and returns its path. Kept separate from `announce.py`
   so other features can reuse synthesis without the HTTP-serving concern, and so
   it can be exercised standalone (`python tts.py "some text"`) to check whether a
   problem is in the TTS output itself vs. in casting/playback.
-- `announce.py` — imports `tts.synthesize` and serves the resulting MP3 over a
-  small stdlib `ThreadingHTTPServer` on the LAN, since the Chromecast can only
-  play HTTP(S) URLs, not local file paths.
+- `announce.py` — serves announcement audio over a small stdlib
+  `ThreadingHTTPServer` on the LAN, since the Chromecast can only play HTTP(S)
+  URLs, not local file paths. `synthesize_and_serve` writes `tts.synthesize`'s MP3;
+  `serve_sound` copies a bundled `sounds.py` asset. Both overwrite the same shared
+  file and return its LAN URL.
   - The audio file is a single fixed path (`tts.DEFAULT_PATH`), overwritten per
     announcement — no per-announcement filenames or cleanup, since motion events
     are already debounced and only one announcement is ever in flight. The

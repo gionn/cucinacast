@@ -95,3 +95,18 @@ def test_announce_port_defaults(monkeypatch):
 def test_announce_port_respects_env(monkeypatch):
     monkeypatch.setenv("ANNOUNCE_PORT", "9999")
     assert announce._announce_port() == 9999
+
+
+def test_serve_sound_copies_file_and_returns_url(monkeypatch, tmp_path):
+    source = tmp_path / "person.mp3"
+    source.write_bytes(b"sound-bytes")
+    served = tmp_path / "served.mp3"
+    monkeypatch.setattr(announce, "DEFAULT_PATH", served)
+    monkeypatch.setattr(announce, "_ensure_server", Mock())
+    monkeypatch.setattr(announce, "_server_port", 8765)
+    monkeypatch.setattr(announce, "_get_lan_ip", lambda: "192.168.1.20")
+
+    url = announce.serve_sound(source)
+
+    assert served.read_bytes() == b"sound-bytes"
+    assert url == "http://192.168.1.20:8765/served.mp3"
