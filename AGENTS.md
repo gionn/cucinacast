@@ -135,19 +135,25 @@ against the real Nest Mini and confirming audio actually plays.
     `create_pullpoint_manager`/`PullMessages` flow as the retired PoC).
     `discover_camera()` runs via `asyncio.to_thread` since it's blocking
     WS-Discovery I/O, same reason as `castyt.py`'s Chromecast discovery.
-  - Classification for an object can arrive after its motion event, not
-    before. A confirmed motion event schedules `_announce_after_delay`
-    (tracked in `pending_tasks`, both to avoid premature GC and to gate
-    classification recording/overlapping evaluations to one at a time), which
-    waits `CLASSIFICATION_WAIT_SECONDS` before reading `last_object_class` and
-    invoking `on_motion`.
+  - Classification for an object often arrives a few seconds after its motion
+    event (and occasionally just before). A confirmed motion event starts
+    `_evaluate_motion` (tracked in `pending_tasks`, both to avoid premature GC
+    and to gate overlapping evaluations to one at a time), which awaits a
+    per-event future resolved by the classification message, up to
+    `MOTION_CLASSIFICATION_TIMEOUT_SECONDS` (default 10) — so a classification
+    that lands late still counts, unlike a fixed-delay snapshot. The future is
+    seeded with a just-seen classification (within the same timeout) to cover
+    the before case. `last_object_class`/`last_object_class_at` hold only the
+    most recent value for that seeding; a classification that resolves an
+    in-flight event is cleared so it can't seed a later alarm, and the pending
+    future, not `pending_tasks`, is what gates a classification to its own event.
   - The debounce cooldown (`MOTION_DEBOUNCE_SECONDS`, default 30) only starts once
     a recognized category is resolved, not the moment raw motion fires — otherwise
     an unclassified event (wind, shadows) would suppress a real one for 30s.
   - `run_forever` wraps `watch_motion` in a retry loop so a transient camera or
     network failure can't crash the bot process.
   - `watch_motion`'s `finally` cancels and awaits any still-pending
-    `_announce_after_delay` task before shutting down the subscription — those
+    `_evaluate_motion` task before shutting down the subscription — those
     tasks are independent children of the loop, not of `watch_motion`, so
     without this an in-flight one could still fire an announcement after a
     subscription failure or shutdown has already moved on to a new watcher.
