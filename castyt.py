@@ -24,9 +24,7 @@ DISCOVERY_RETRY_DELAY_SECONDS = 3
 
 
 class DeviceUnavailable(Exception):
-    """The speaker could not be reached on the network. Distinct from a track
-    that fails to play: this is an infrastructure problem, so callers should
-    abort instead of skipping to the next queue entry."""
+    """The speaker could not be reached, as opposed to a track that failed."""
 
 
 def _nest_device_name():
@@ -158,11 +156,8 @@ class Player:
                         logger.warning("Speaker unavailable; not resuming queue")
                 return
             if self.query is None or not self.queue:
-                # A FINISHED status arrives on the shared device connection for
-                # whatever media is running, not just ours — e.g. media the user
-                # started directly on the speaker, or a stale session of ours. With
-                # no active /play queue there is nothing to advance, and growing the
-                # queue here would search for query=None and hijack the device.
+                # new_media_status sees every session on the device, not just
+                # ours, so a FINISHED can belong to media the user started.
                 logger.info("No active playback queue; ignoring finished media")
                 return
             if (
@@ -170,8 +165,7 @@ class Player:
                 and self._current_content_id is not None
                 and finished_content_id != self._current_content_id
             ):
-                # The session that finished isn't the track we loaded, so it isn't
-                # ours to advance — the user may be playing something else.
+                # Not the track we loaded, so not ours to advance.
                 logger.info(
                     "Finished content %r is not the track we are playing (%r); ignoring",
                     finished_content_id,
@@ -240,8 +234,8 @@ class Player:
                 storage.record_play(self.query, entry["id"])
                 return entry
             except DeviceUnavailable:
-                # The speaker is unreachable — not this track's fault. Abort the
-                # whole attempt instead of rediscovering (and skipping) every entry.
+                # An unreachable speaker isn't a bad track; don't skip through
+                # the queue rediscovering for every entry.
                 logger.warning("Speaker unavailable, aborting playback attempt")
                 raise
             except CastError:
@@ -255,8 +249,7 @@ class Player:
 
     def _grow_queue_locked(self):
         if not self.query:
-            # Nothing was requested, so there is nothing to grow (and a None query
-            # would otherwise become a literal "ytsearchN:None" search).
+            # Without a query this would become a literal "ytsearchN:None" search.
             logger.warning("Not growing queue: no active query")
             return
         seen_ids = {e["id"] for e in self.queue}

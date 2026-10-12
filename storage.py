@@ -26,8 +26,7 @@ def init_db():
             "(query TEXT, video_id TEXT, title TEXT, view_count INTEGER, fetched_at REAL)"
         )
         conn.execute("DROP TABLE IF EXISTS devices")  # legacy Bluetooth-presence table
-        # `query` is never legitimately NULL; rows under a NULL query are leftover
-        # from a bug that searched for the literal string "None". Purge them.
+        # No valid row has a NULL query; drop any that remain.
         conn.execute("DELETE FROM plays WHERE query IS NULL")
         conn.execute("DELETE FROM search_cache WHERE query IS NULL")
 
