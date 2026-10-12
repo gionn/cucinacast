@@ -250,6 +250,31 @@ def test_new_media_status_advances_when_content_id_matches():
     player._play_next_locked.assert_called_once()
 
 
+def test_new_media_status_ignores_when_session_ids_differ_even_if_content_matches():
+    # Announcements reuse one URL, so a conflicting session id must win over a
+    # matching content id.
+    player = castyt.Player()
+    player._announcing = True
+    player._announcing_content_id = "http://host/cucinacast_announce.mp3"
+    player._announcing_session_id = 5
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._play_current_locked = Mock()
+    player._try_play_locked = Mock()
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="IDLE",
+            idle_reason="FINISHED",
+            content_id="http://host/cucinacast_announce.mp3",
+            media_session_id=9,
+        )
+    )
+
+    player._play_current_locked.assert_not_called()
+    player._try_play_locked.assert_not_called()
+
+
 def test_new_media_status_resumes_after_announcement(monkeypatch):
     player = castyt.Player()
     player._announcing = True
@@ -408,6 +433,21 @@ def test_announce_clears_announcing_flag_on_failure(monkeypatch):
 
     assert player._announcing is False
     assert player._announcing_content_id is None
+
+
+def test_announce_clears_state_and_reraises_on_device_unavailable(monkeypatch):
+    monkeypatch.setattr(castyt, "_get_device", Mock(side_effect=castyt.DeviceUnavailable("nope")))
+    player = castyt.Player()
+    player._announcing = True
+    player._announcing_content_id = "old"
+    player._announcing_session_id = 1
+
+    with pytest.raises(castyt.DeviceUnavailable):
+        player.announce("http://host/audio.mp3")
+
+    assert player._announcing is False
+    assert player._announcing_content_id is None
+    assert player._announcing_session_id is None
 
 
 def test_try_play_locked_records_play_on_success(monkeypatch):
@@ -574,6 +614,22 @@ def test_play_current_locked_records_session_id(monkeypatch):
     player._play_current_locked()
 
     assert player._current_session_id == 7
+
+
+def test_play_current_locked_clears_ownership_ids_on_failure(monkeypatch):
+    monkeypatch.setattr(castyt, "_get_device", Mock(side_effect=castyt.DeviceUnavailable("nope")))
+    player = castyt.Player()
+    player.query = "q"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._current_content_id = "stale"
+    player._current_session_id = 5
+
+    with pytest.raises(castyt.DeviceUnavailable):
+        player._play_current_locked()
+
+    assert player._current_content_id is None
+    assert player._current_session_id is None
 
 
 def test_play_search_raises_when_nothing_playable(monkeypatch):
