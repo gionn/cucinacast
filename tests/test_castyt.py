@@ -214,17 +214,51 @@ def test_new_media_status_advances_when_content_id_matches():
 def test_new_media_status_resumes_after_announcement(monkeypatch):
     player = castyt.Player()
     player._announcing = True
+    player._announcing_content_id = "http://host/announce.mp3"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
     player._interrupted_at_seconds = 12.3
     player._play_current_locked = Mock()
     player._play_next_locked = Mock()
 
-    player.new_media_status(_FINISHED_STATUS)
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="IDLE",
+            idle_reason="FINISHED",
+            content_id="http://host/announce.mp3",
+        )
+    )
 
     player._play_current_locked.assert_called_once_with(current_time=12.3)
     assert player._announcing is False
+    assert player._announcing_content_id is None
     player._play_next_locked.assert_not_called()
+
+
+def test_new_media_status_drops_resume_when_announcement_replaced():
+    # The user replaced the announcement with their own media, so the interrupted
+    # track must not resume over it.
+    player = castyt.Player()
+    player._announcing = True
+    player._announcing_content_id = "http://host/announce.mp3"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+    player._try_play_locked = Mock()
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="IDLE",
+            idle_reason="FINISHED",
+            content_id="http://news.example/other",
+        )
+    )
+
+    player._play_current_locked.assert_not_called()
+    player._try_play_locked.assert_not_called()
+    assert player._announcing is False
+    assert player._announcing_content_id is None
 
 
 def test_new_media_status_resets_device_on_cast_error_resuming():
@@ -309,6 +343,7 @@ def test_announce_captures_interrupted_position_and_plays_url(monkeypatch):
 
     assert player._interrupted_at_seconds == 5.0
     assert player._announcing is True
+    assert player._announcing_content_id == "http://host/audio.mp3"
     fake_device.controller.play_media_url.assert_called_once_with(
         "http://host/audio.mp3", content_type="audio/mpeg", stream_type="BUFFERED"
     )
@@ -323,6 +358,7 @@ def test_announce_clears_announcing_flag_on_failure(monkeypatch):
     player.announce("http://host/audio.mp3")
 
     assert player._announcing is False
+    assert player._announcing_content_id is None
 
 
 def test_try_play_locked_records_play_on_success(monkeypatch):

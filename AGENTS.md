@@ -239,11 +239,14 @@ against the real Nest Mini and confirming audio actually plays.
     long-held connection or extra locking, since `Player` already serializes its
     own calls into this module through `self._lock`.
 - `Player.announce(url)` in `castyt.py` interrupts current playback to play an
-  arbitrary announcement URL, tracked via an `_announcing` flag on `Player`. The
-  `new_media_status` FINISHED callback branches on this flag: after an
-  announcement it resumes the current queue entry near where it was interrupted;
-  otherwise it advances the queue as before. `stop()` also clears `_announcing`
-  so a `/stop` mid-announcement can't leave a stale flag.
+  arbitrary announcement URL, tracked via an `_announcing` flag on `Player` plus
+  `_announcing_content_id` (the announcement URL). The `new_media_status` FINISHED
+  callback only treats a finish as the announcement's when its `content_id` matches
+  that URL; a finish from any other session means the user replaced the announcement,
+  so the pending resume is dropped instead of fired over their media. After a matching
+  finish it resumes the current queue entry near where it was interrupted; otherwise it
+  advances the queue as before. `stop()`, `skip()` and `play_search()` also clear
+  `_announcing` so a `/stop` or fresh `/play` mid-announcement can't leave a stale flag.
   - Resume position is approximated, not exact: `_play_current_locked` records
     `_track_started_at = time.monotonic() - (current_time or 0)` whenever it
     (re)starts a track. `announce()` captures

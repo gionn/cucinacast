@@ -90,6 +90,7 @@ class Player:
         self.queue = []
         self.index = -1
         self._announcing = False
+        self._announcing_content_id = None
         self._track_started_at = 0
         self._interrupted_at_seconds = None
         self._current_content_id = None
@@ -126,7 +127,23 @@ class Player:
         with self._lock:
             finished_content_id = getattr(status, "content_id", None)
             if self._announcing:
+                if (
+                    finished_content_id is not None
+                    and self._announcing_content_id is not None
+                    and finished_content_id != self._announcing_content_id
+                ):
+                    # The user replaced our announcement before it finished; drop the
+                    # pending resume rather than firing it over their media.
+                    logger.info(
+                        "Finished content %r is not our announcement (%r); dropping resume",
+                        finished_content_id,
+                        self._announcing_content_id,
+                    )
+                    self._announcing = False
+                    self._announcing_content_id = None
+                    return
                 self._announcing = False
+                self._announcing_content_id = None
                 if 0 <= self.index < len(self.queue):
                     try:
                         self._play_current_locked(current_time=self._interrupted_at_seconds)
@@ -185,6 +202,7 @@ class Player:
         few seconds)."""
         with self._lock:
             self._announcing = True
+            self._announcing_content_id = url
             if 0 <= self.index < len(self.queue):
                 self._interrupted_at_seconds = time.monotonic() - self._track_started_at
             else:
@@ -198,6 +216,7 @@ class Player:
             except Exception:
                 logger.exception("Failed to play announcement")
                 self._announcing = False
+                self._announcing_content_id = None
 
     def _play_current_locked(self, current_time=None):
         entry = self.queue[self.index]
@@ -270,6 +289,7 @@ class Player:
             self.queue = entries
             self.index = 0
             self._announcing = False  # a fresh /play supersedes any in-flight announcement
+            self._announcing_content_id = None
             played = self._try_play_locked()
         if not played:
             raise RuntimeError(f"No playable YouTube results for {query!r}")
@@ -280,6 +300,7 @@ class Player:
             if not (0 <= self.index < len(self.queue)):
                 raise RuntimeError("Nothing is playing.")
             self._announcing = False
+            self._announcing_content_id = None
             self.index += 1
             played = self._try_play_locked()
         if not played:
@@ -306,6 +327,7 @@ class Player:
             self.queue = []
             self.index = -1
             self._announcing = False
+            self._announcing_content_id = None
             try:
                 self._ensure_device().stop()
             except DeviceUnavailable:
