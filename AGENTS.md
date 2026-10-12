@@ -74,9 +74,13 @@ against the real Nest Mini and confirming audio actually plays.
     an active queue (`query` set, queue non-empty) *and* the finished session is the
     one it started (matched by media session id, or content id as a fallback); media
     the user started directly is left alone, and `_grow_queue_locked` refuses to run
-    without a query. When the queue runs out it re-searches the same query for more
-    results (`_grow_queue_locked`), excluding both video ids already in the queue and
-    ids from `storage.recent_ids` (recently played for that query), so playback
+    without a query. The bot captures both session ids from a media status once its
+    own content is current, not straight after `play_media_url`: catt's
+    `block_until_active` can return on the previous session, and that stale id would
+    then never match this media's FINISHED. When the queue runs out it re-searches
+    the same query for more results (`_grow_queue_locked`), excluding both video ids
+    already in the queue and ids from `storage.recent_ids` (recently played for that
+    query), so playback
     continues indefinitely until `/stop` without repeating recent picks. Unplayable
     entries (private/removed videos) are skipped automatically (`_try_play_locked`),
     which also records a successful play via `storage.record_play` — announcement
