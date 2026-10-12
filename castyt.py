@@ -23,6 +23,12 @@ DISCOVERY_RETRIES = 3
 DISCOVERY_RETRY_DELAY_SECONDS = 3
 
 
+class DeviceUnavailable(Exception):
+    """The speaker could not be reached on the network. Distinct from a track
+    that fails to play: this is an infrastructure problem, so callers should
+    abort instead of skipping to the next queue entry."""
+
+
 def _nest_device_name():
     return os.environ.get("NEST_DEVICE_NAME")
 
@@ -37,7 +43,9 @@ def _get_device():
             last_error = exc
             if attempt < DISCOVERY_RETRIES - 1:
                 time.sleep(DISCOVERY_RETRY_DELAY_SECONDS)
-    raise last_error
+    name = _nest_device_name()
+    target = f"Chromecast {name!r}" if name else "Chromecast"
+    raise DeviceUnavailable(f"{target} could not be found on the network") from last_error
 
 
 def _fetch_live(query, fetch_count):
@@ -136,6 +144,12 @@ class Player:
                     try:
                         self._play_current_locked(current_time=self._interrupted_at_seconds)
                         return
+                    except DeviceUnavailable:
+                        logger.warning(
+                            "Speaker unavailable; not resuming %r after announcement",
+                            self.queue[self.index].get("title"),
+                        )
+                        return
                     except CastError:
                         logger.exception(
                             "Failed to resume %r after announcement",
@@ -149,7 +163,10 @@ class Player:
                             self.queue[self.index].get("title"),
                         )
                         self.index += 1
-                    self._try_play_locked()
+                    try:
+                        self._try_play_locked()
+                    except DeviceUnavailable:
+                        logger.warning("Speaker unavailable; not resuming queue")
                 return
             if self.query is None or not self.queue:
                 # A FINISHED status arrives on the shared device connection for
@@ -172,7 +189,10 @@ class Player:
                     self._current_content_id,
                 )
                 return
-            self._play_next_locked()
+            try:
+                self._play_next_locked()
+            except DeviceUnavailable:
+                logger.warning("Speaker unavailable; not advancing queue")
 
     def announce(self, url, content_type="audio/mpeg"):
         """Interrupt current playback (if any) to play a one-off announcement URL;
@@ -230,6 +250,11 @@ class Player:
                 self._play_current_locked()
                 storage.record_play(self.query, entry["id"])
                 return entry
+            except DeviceUnavailable:
+                # The speaker is unreachable — not this track's fault. Abort the
+                # whole attempt instead of rediscovering (and skipping) every entry.
+                logger.warning("Speaker unavailable, aborting playback attempt")
+                raise
             except CastError:
                 logger.exception("Skipping unplayable track %r", entry.get("title"))
                 self._reset_cast_device_locked()
@@ -299,7 +324,11 @@ class Player:
             self.queue = []
             self.index = -1
             self._announcing = False
-            self._ensure_device().stop()
+            try:
+                self._ensure_device().stop()
+            except DeviceUnavailable:
+                # Always clear our own state, even if the speaker can't be reached.
+                logger.warning("Speaker unavailable while stopping; cleared queue state")
 
 
 player = Player()

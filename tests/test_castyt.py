@@ -487,3 +487,62 @@ def test_stop_resets_player_state(monkeypatch):
     assert player.index == -1
     assert player._announcing is False
     fake_device.stop.assert_called_once()
+
+
+def test_get_device_raises_device_unavailable(monkeypatch):
+    monkeypatch.setattr(castyt, "DISCOVERY_RETRIES", 2)
+    monkeypatch.setattr(castyt.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(castyt, "CattDevice", Mock(side_effect=CastError("nope")))
+
+    with pytest.raises(castyt.DeviceUnavailable):
+        castyt._get_device()
+
+
+def test_try_play_locked_aborts_on_device_unavailable(monkeypatch):
+    # A discovery/transport failure must not be mistaken for an unplayable track:
+    # no index advance, no per-entry rediscovery, just abort.
+    player = castyt.Player()
+    player.query = "q"
+    player.queue = [
+        {"id": "a", "title": "A", "url": "u1"},
+        {"id": "b", "title": "B", "url": "u2"},
+    ]
+    player.index = 0
+    player._play_current_locked = Mock(side_effect=castyt.DeviceUnavailable("nope"))
+    player._reset_cast_device_locked = Mock()
+    player._grow_queue_locked = Mock()
+
+    with pytest.raises(castyt.DeviceUnavailable):
+        player._try_play_locked()
+
+    assert player.index == 0
+    player._reset_cast_device_locked.assert_not_called()
+    player._grow_queue_locked.assert_not_called()
+
+
+def test_new_media_status_swallows_device_unavailable():
+    player = castyt.Player()
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._play_next_locked = Mock(side_effect=castyt.DeviceUnavailable("nope"))
+
+    player.new_media_status(_FINISHED_STATUS)  # must not raise into the callback thread
+
+    player._play_next_locked.assert_called_once()
+
+
+def test_stop_clears_state_when_device_unavailable(monkeypatch):
+    monkeypatch.setattr(castyt, "_get_device", Mock(side_effect=castyt.DeviceUnavailable("nope")))
+    player = castyt.Player()
+    player._announcing = True
+    player.query = "q"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+
+    player.stop()  # must not raise
+
+    assert player.query is None
+    assert player.queue == []
+    assert player.index == -1
+    assert player._announcing is False

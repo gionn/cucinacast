@@ -84,7 +84,12 @@ against the real Nest Mini and confirming audio actually plays.
     recent picks. Unplayable entries (private/removed videos) are skipped
     automatically (`_try_play_locked`), which also records a successful play via
     `storage.record_play` — announcement resumes (in `new_media_status`) don't call
-    `_try_play_locked`, so they aren't recorded as a new play.
+    `_try_play_locked`, so they aren't recorded as a new play. A discovery/transport
+    failure is *not* a per-track failure: `_get_device` raises `DeviceUnavailable`,
+    which `_try_play_locked` re-raises to abort the attempt immediately instead of
+    logging "unplayable track" and rediscovering/skipping every queue entry (~20s
+    per entry), so `/play` fails fast with a clear reason when the speaker is
+    unreachable.
   - All device/queue mutation goes through `self._lock` since the pychromecast status
     callback fires on its own socket thread, concurrently with bot-triggered calls.
   - Casting a URL requires building a `catt.stream_info.StreamInfo` with
@@ -96,7 +101,10 @@ against the real Nest Mini and confirming audio actually plays.
   - Live YouTube streams resolve to an HLS manifest whose content type isn't always
     detected — this is a known limitation, not something to "fix" reactively.
   - Device discovery (`_get_device`) retries a few times since local mDNS discovery is
-    occasionally flaky.
+    occasionally flaky. After the retries it raises `DeviceUnavailable` rather than the
+    raw `catt.error.CastError`, so callers can tell a missing speaker apart from a
+    track that won't play; the status-callback and `stop()` paths swallow it so a
+    dropped device never crashes the listener thread or blocks clearing state.
   - Each device connection gets a persistent zeroconf instance injected onto its
     socket client (`Player._live_zconf`, created once and never closed). catt
     hands every Chromecast the discovery browser's shared zeroconf and then
