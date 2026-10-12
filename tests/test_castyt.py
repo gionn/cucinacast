@@ -133,6 +133,22 @@ def test_new_media_status_ignores_non_finished_status():
     player._play_next_locked.assert_not_called()
 
 
+def test_new_media_status_ignores_idle_with_non_finished_reason():
+    # Stopping media by hand reports CANCELLED/INTERRUPTED, not FINISHED; it must
+    # not advance the queue (even with an active one).
+    player = castyt.Player()
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._play_next_locked = Mock()
+
+    player.new_media_status(
+        SimpleNamespace(player_state="IDLE", idle_reason="CANCELLED", content_id="x")
+    )
+
+    player._play_next_locked.assert_not_called()
+
+
 def test_new_media_status_ignores_finished_without_active_queue():
     # A FINISHED status from media the user started directly on the device (or a
     # stale session) must not make the bot start casting on its own.
