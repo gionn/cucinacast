@@ -46,12 +46,6 @@ def _get_device():
     raise DeviceUnavailable(f"{target} could not be found on the network") from last_error
 
 
-def _media_session_id(device):
-    status = getattr(getattr(device, "_cast", None), "media_controller", None)
-    session_id = getattr(getattr(status, "status", None), "media_session_id", None)
-    return session_id if isinstance(session_id, int) else None
-
-
 def _is_our_session(finished_content_id, finished_session_id, content_id, session_id):
     """Whether a FINISHED status can be proven to belong to a session we started.
     A reported session id is authoritative; the content id is only a fallback when
@@ -144,8 +138,31 @@ class Player:
                 logger.exception("Error disconnecting stale Chromecast device")
             self._device = None
 
+    def _capture_session_id(self, status):
+        """Record the session id of the media we just loaded, once the device
+        reports it as current. catt's `block_until_active` only waits for *any*
+        active session, which can still be the previous one, so reading the id
+        straight after `play_media_url` can pick up a stale value and make our
+        own media's FINISHED look like someone else's."""
+        content_id = getattr(status, "content_id", None)
+        session_id = getattr(status, "media_session_id", None)
+        if content_id is None or not isinstance(session_id, int):
+            return
+        with self._lock:
+            if (
+                self._announcing
+                and self._announcing_session_id is None
+                and content_id == self._announcing_content_id
+            ):
+                self._announcing_session_id = session_id
+                logger.info("Announcement running as session %s", session_id)
+            elif self._current_session_id is None and content_id == self._current_content_id:
+                self._current_session_id = session_id
+                logger.info("Track running as session %s", session_id)
+
     def new_media_status(self, status):
         if status.player_state != "IDLE" or status.idle_reason != "FINISHED":
+            self._capture_session_id(status)
             return
         with self._lock:
             finished_content_id = getattr(status, "content_id", None)
@@ -159,7 +176,14 @@ class Player:
                 ):
                     # Can't prove this finish is our announcement, so the user replaced
                     # it; drop the resume rather than firing it over their media.
-                    logger.info("Finished session is not our announcement; dropping resume")
+                    logger.info(
+                        "Finished session %s (content %r) is not our announcement "
+                        "session %s (content %r); dropping resume",
+                        finished_session_id,
+                        finished_content_id,
+                        self._announcing_session_id,
+                        self._announcing_content_id,
+                    )
                     self._clear_announcing()
                     return
                 self._clear_announcing()
@@ -220,6 +244,7 @@ class Player:
         with self._lock:
             self._announcing = True
             self._announcing_content_id = url
+            self._announcing_session_id = None  # filled in by _capture_session_id
             if 0 <= self.index < len(self.queue):
                 self._interrupted_at_seconds = time.monotonic() - self._track_started_at
             else:
@@ -230,7 +255,6 @@ class Player:
                 device.controller.play_media_url(
                     url, content_type=content_type, stream_type="BUFFERED"
                 )
-                self._announcing_session_id = _media_session_id(device)
             except DeviceUnavailable:
                 self._clear_announcing()
                 raise
@@ -255,8 +279,7 @@ class Player:
             current_time=current_time,
         )
         self._track_started_at = time.monotonic() - (current_time or 0)
-        self._current_content_id = stream.video_url
-        self._current_session_id = _media_session_id(device)
+        self._current_content_id = stream.video_url  # session id captured by _capture_session_id
 
     def _play_next_locked(self):
         self.index += 1

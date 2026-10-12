@@ -212,6 +212,82 @@ def test_new_media_status_advances_on_session_id_match():
     player._play_next_locked.assert_called_once()
 
 
+def test_captures_track_session_id_from_device_status():
+    # The session id read right after play_media_url can be a stale one (catt's
+    # block_until_active returns on the previous session), so it is taken from the
+    # status once our own content is current instead.
+    player = castyt.Player()
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._current_content_id = "u"
+    player._play_next_locked = Mock()
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="PLAYING", idle_reason=None, content_id="u", media_session_id=7
+        )
+    )
+
+    assert player._current_session_id == 7
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="IDLE", idle_reason="FINISHED", content_id="u", media_session_id=7
+        )
+    )
+
+    player._play_next_locked.assert_called_once()
+
+
+def test_does_not_capture_session_id_for_other_content():
+    player = castyt.Player()
+    player._current_content_id = "u"
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="PLAYING", idle_reason=None, content_id="other", media_session_id=7
+        )
+    )
+
+    assert player._current_session_id is None
+
+
+def test_captures_announcement_session_id_from_device_status():
+    # Regression: the id read straight after play_media_url was the previous
+    # announcement's, so the announcement's own FINISHED was rejected as someone
+    # else's and the resume was dropped.
+    player = castyt.Player()
+    player._announcing = True
+    player._announcing_content_id = "http://host/announce.mp3"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="PLAYING",
+            idle_reason=None,
+            content_id="http://host/announce.mp3",
+            media_session_id=9,
+        )
+    )
+
+    assert player._announcing_session_id == 9
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="IDLE",
+            idle_reason="FINISHED",
+            content_id="http://host/announce.mp3",
+            media_session_id=9,
+        )
+    )
+
+    player._play_current_locked.assert_called_once_with(current_time=12.3)
+
+
 def test_new_media_status_ignores_foreign_media_when_queue_active():
     # Even with an active queue, a finished session that isn't the track we
     # loaded (e.g. the user's news) must not be treated as ours to advance.
@@ -601,7 +677,9 @@ def test_play_current_locked_records_content_id(monkeypatch):
     assert player._current_session_id is None
 
 
-def test_play_current_locked_records_session_id(monkeypatch):
+def test_play_current_locked_leaves_session_id_for_the_status_callback(monkeypatch):
+    # The session id read straight after play_media_url can be the previous
+    # session's, so _play_current_locked leaves it to _capture_session_id.
     device = _FakeDevice()
     device._cast.media_controller.status.media_session_id = 7
     monkeypatch.setattr(castyt, "_get_device", lambda: device)
@@ -613,7 +691,7 @@ def test_play_current_locked_records_session_id(monkeypatch):
 
     player._play_current_locked()
 
-    assert player._current_session_id == 7
+    assert player._current_session_id is None
 
 
 def test_play_current_locked_clears_ownership_ids_on_failure(monkeypatch):
