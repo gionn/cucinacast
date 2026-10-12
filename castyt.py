@@ -123,30 +123,10 @@ class Player:
             self._device = None
 
     def new_media_status(self, status):
-        if status.player_state != "IDLE":
-            return
-        if status.idle_reason != "FINISHED":
-            # Visible so we can tell what the device reports for external media
-            # (e.g. the user stopping their own playback). Not acted upon.
-            logger.info(
-                "Media idle: idle_reason=%s content_id=%r (not FINISHED; ignoring)",
-                status.idle_reason,
-                getattr(status, "content_id", None),
-            )
+        if status.player_state != "IDLE" or status.idle_reason != "FINISHED":
             return
         with self._lock:
             finished_content_id = getattr(status, "content_id", None)
-            logger.info(
-                "Media finished: idle_reason=%s content_id=%r announcing=%s "
-                "query=%r index=%d queue=%d current_content_id=%r",
-                status.idle_reason,
-                finished_content_id,
-                self._announcing,
-                self.query,
-                self.index,
-                len(self.queue),
-                self._current_content_id,
-            )
             if self._announcing:
                 self._announcing = False
                 if 0 <= self.index < len(self.queue):
