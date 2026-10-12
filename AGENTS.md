@@ -69,27 +69,20 @@ against the real Nest Mini and confirming audio actually plays.
     `catt.api.CattDevice` connection and a search-result queue. It registers itself as
     a `pychromecast` media status listener (`new_media_status`) to detect when a track
     finishes (`player_state == "IDLE"` and `idle_reason == "FINISHED"`) and
-    auto-advances to the next queued result. Because that status arrives on the
-    shared device connection for *whatever* media is running, the FINISHED handler
-    only advances when the bot actually has a requested queue (`query` set, queue
-    non-empty) *and* the finished `content_id` matches the track the bot loaded
-    (`_current_content_id`, recorded in `_play_current_locked`) — otherwise media the
-    user started directly on the speaker (or a stale session) would make the bot
-    force-launch over it. For the same reason `_grow_queue_locked` refuses to run
-    with an empty query, which would otherwise become a literal `ytsearchN:None`
-    search and a self-triggered playback loop. When the queue runs out it re-searches
-    the same query for more results (`_grow_queue_locked`), excluding both video ids
-    already in the queue and ids from `storage.recent_ids` (recently played for that
-    query), so playback continues indefinitely until `/stop` without repeating
-    recent picks. Unplayable entries (private/removed videos) are skipped
-    automatically (`_try_play_locked`), which also records a successful play via
-    `storage.record_play` — announcement resumes (in `new_media_status`) don't call
-    `_try_play_locked`, so they aren't recorded as a new play. A discovery/transport
-    failure is *not* a per-track failure: `_get_device` raises `DeviceUnavailable`,
-    which `_try_play_locked` re-raises to abort the attempt immediately instead of
-    logging "unplayable track" and rediscovering/skipping every queue entry (~20s
-    per entry), so `/play` fails fast with a clear reason when the speaker is
-    unreachable.
+    auto-advances to the next queued result. That status arrives for whatever
+    session is on the device, so the FINISHED handler only advances when the bot has
+    an active queue (`query` set, queue non-empty) *and* the finished `content_id` is
+    the track it loaded (`_current_content_id`); media the user started directly is
+    left alone, and `_grow_queue_locked` refuses to run without a query. When the
+    queue runs out it re-searches the same query for more results (`_grow_queue_locked`),
+    excluding both video ids already in the queue and ids from `storage.recent_ids`
+    (recently played for that query), so playback continues indefinitely until `/stop`
+    without repeating recent picks. Unplayable entries (private/removed videos) are
+    skipped automatically (`_try_play_locked`), which also records a successful play
+    via `storage.record_play` — announcement resumes (in `new_media_status`) don't call
+    `_try_play_locked`, so they aren't recorded as a new play. A discovery failure is
+    not a per-track failure: `_get_device` raises `DeviceUnavailable` and the play
+    attempt aborts instead of skipping through the queue.
   - All device/queue mutation goes through `self._lock` since the pychromecast status
     callback fires on its own socket thread, concurrently with bot-triggered calls.
   - Casting a URL requires building a `catt.stream_info.StreamInfo` with
@@ -101,10 +94,8 @@ against the real Nest Mini and confirming audio actually plays.
   - Live YouTube streams resolve to an HLS manifest whose content type isn't always
     detected — this is a known limitation, not something to "fix" reactively.
   - Device discovery (`_get_device`) retries a few times since local mDNS discovery is
-    occasionally flaky. After the retries it raises `DeviceUnavailable` rather than the
-    raw `catt.error.CastError`, so callers can tell a missing speaker apart from a
-    track that won't play; the status-callback and `stop()` paths swallow it so a
-    dropped device never crashes the listener thread or blocks clearing state.
+    occasionally flaky. After the retries it raises `DeviceUnavailable`, so callers can
+    tell a missing speaker apart from a track that won't play.
   - Each device connection gets a persistent zeroconf instance injected onto its
     socket client (`Player._live_zconf`, created once and never closed). catt
     hands every Chromecast the discovery browser's shared zeroconf and then
@@ -222,10 +213,8 @@ against the real Nest Mini and confirming audio actually plays.
     at startup by `bot.main()` — `_connect()` stays free of DDL, since DDL
     takes a heavier lock than normal reads/writes. `init_db()` also drops the
     `devices` table left by the removed Bluetooth-presence feature, and purges
-    any `query IS NULL` rows from `plays`/`search_cache` (leftover from the
-    removed None-query playback loop). All query lookups use `query IS ?` rather
-    than `= ?` so a `None` query still compares null-safe instead of silently
-    matching nothing.
+    any `query IS NULL` rows. Query lookups use `IS ?` so a `None` query compares
+    correctly instead of silently matching nothing.
   - `plays` table backs `record_play`/`recent_ids`: each query keeps only its
     `HISTORY_LIMIT` most recent plays (older rows for that query are deleted on
     each `record_play`), so recency-based exclusion needs no unbounded memory or
@@ -239,14 +228,14 @@ against the real Nest Mini and confirming audio actually plays.
     long-held connection or extra locking, since `Player` already serializes its
     own calls into this module through `self._lock`.
 - `Player.announce(url)` in `castyt.py` interrupts current playback to play an
-  arbitrary announcement URL, tracked via an `_announcing` flag on `Player` plus
-  `_announcing_content_id` (the announcement URL). The `new_media_status` FINISHED
-  callback only treats a finish as the announcement's when its `content_id` matches
-  that URL; a finish from any other session means the user replaced the announcement,
-  so the pending resume is dropped instead of fired over their media. After a matching
-  finish it resumes the current queue entry near where it was interrupted; otherwise it
-  advances the queue as before. `stop()`, `skip()` and `play_search()` also clear
-  `_announcing` so a `/stop` or fresh `/play` mid-announcement can't leave a stale flag.
+  arbitrary announcement URL, tracked via an `_announcing` flag on `Player`. The
+  `new_media_status` FINISHED callback branches on this flag: after an
+  announcement it resumes the current queue entry near where it was interrupted;
+  otherwise it advances the queue as before. It only counts a finish as the
+  announcement's when the finished `content_id` matches the announcement URL, so a
+  user replacing the announcement with their own media drops the resume instead of
+  taking over. `stop()` and a fresh `/play` also clear `_announcing`, so they can't
+  leave a stale flag.
   - Resume position is approximated, not exact: `_play_current_locked` records
     `_track_started_at = time.monotonic() - (current_time or 0)` whenever it
     (re)starts a track. `announce()` captures
