@@ -78,6 +78,34 @@ def test_record_play_breaks_played_at_ties_by_insertion_order(monkeypatch):
     assert storage.recent_ids("daft punk") == {"id2", "id3", "id4"}
 
 
+def test_init_db_drops_null_query_rows():
+    storage.store_pool(None, [{"id": "a", "title": "Song A", "view_count": 100}])
+    storage.record_play(None, "x")
+    storage.init_db()
+    with storage._connect() as conn:
+        cache_nulls = conn.execute(
+            "SELECT COUNT(*) FROM search_cache WHERE query IS NULL"
+        ).fetchone()
+        play_nulls = conn.execute("SELECT COUNT(*) FROM plays WHERE query IS NULL").fetchone()
+    assert cache_nulls[0] == 0
+    assert play_nulls[0] == 0
+
+
+def test_store_pool_null_query_replaces_and_hits_null_safely():
+    storage.store_pool(None, [{"id": "a", "title": "Song A", "view_count": 100}])
+    assert storage.cached_pool(None, min_count=1) == [
+        {"id": "a", "title": "Song A", "view_count": 100}
+    ]
+    storage.store_pool(None, [{"id": "b", "title": "Song B", "view_count": 200}])
+    assert [e["id"] for e in storage.cached_pool(None, min_count=1)] == ["b"]
+
+
+def test_recent_ids_null_query_is_null_safe():
+    storage.record_play(None, "abc")
+    assert storage.recent_ids(None) == {"abc"}
+    assert storage.recent_ids("daft punk") == set()
+
+
 def test_cached_pool_miss_when_absent():
     assert storage.cached_pool("daft punk", min_count=5) is None
 

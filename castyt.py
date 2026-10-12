@@ -23,6 +23,10 @@ DISCOVERY_RETRIES = 3
 DISCOVERY_RETRY_DELAY_SECONDS = 3
 
 
+class DeviceUnavailable(Exception):
+    """The speaker could not be reached, as opposed to a track that failed."""
+
+
 def _nest_device_name():
     return os.environ.get("NEST_DEVICE_NAME")
 
@@ -37,7 +41,25 @@ def _get_device():
             last_error = exc
             if attempt < DISCOVERY_RETRIES - 1:
                 time.sleep(DISCOVERY_RETRY_DELAY_SECONDS)
-    raise last_error
+    name = _nest_device_name()
+    target = f"Chromecast {name!r}" if name else "Chromecast"
+    raise DeviceUnavailable(f"{target} could not be found on the network") from last_error
+
+
+def _media_session_id(device):
+    status = getattr(getattr(device, "_cast", None), "media_controller", None)
+    session_id = getattr(getattr(status, "status", None), "media_session_id", None)
+    return session_id if isinstance(session_id, int) else None
+
+
+def _is_our_session(finished_content_id, finished_session_id, content_id, session_id):
+    """Whether a FINISHED status can be proven to belong to a session we started.
+    A reported session id is authoritative; the content id is only a fallback when
+    one side has no session id. Announcements reuse one URL, so a conflicting
+    session id must not be overridden by a matching content id."""
+    if session_id is not None and finished_session_id is not None:
+        return finished_session_id == session_id
+    return content_id is not None and finished_content_id == content_id
 
 
 def _fetch_live(query, fetch_count):
@@ -84,8 +106,17 @@ class Player:
         self.queue = []
         self.index = -1
         self._announcing = False
+        self._announcing_content_id = None
+        self._announcing_session_id = None
         self._track_started_at = 0
         self._interrupted_at_seconds = None
+        self._current_content_id = None
+        self._current_session_id = None
+
+    def _clear_announcing(self):
+        self._announcing = False
+        self._announcing_content_id = None
+        self._announcing_session_id = None
 
     def _live_zconf(self):
         """Return a persistent zeroconf instance, created once and never
@@ -117,11 +148,30 @@ class Player:
         if status.player_state != "IDLE" or status.idle_reason != "FINISHED":
             return
         with self._lock:
+            finished_content_id = getattr(status, "content_id", None)
+            finished_session_id = getattr(status, "media_session_id", None)
             if self._announcing:
-                self._announcing = False
+                if not _is_our_session(
+                    finished_content_id,
+                    finished_session_id,
+                    self._announcing_content_id,
+                    self._announcing_session_id,
+                ):
+                    # Can't prove this finish is our announcement, so the user replaced
+                    # it; drop the resume rather than firing it over their media.
+                    logger.info("Finished session is not our announcement; dropping resume")
+                    self._clear_announcing()
+                    return
+                self._clear_announcing()
                 if 0 <= self.index < len(self.queue):
                     try:
                         self._play_current_locked(current_time=self._interrupted_at_seconds)
+                        return
+                    except DeviceUnavailable:
+                        logger.warning(
+                            "Speaker unavailable; not resuming %r after announcement",
+                            self.queue[self.index].get("title"),
+                        )
                         return
                     except CastError:
                         logger.exception(
@@ -136,9 +186,30 @@ class Player:
                             self.queue[self.index].get("title"),
                         )
                         self.index += 1
-                    self._try_play_locked()
+                    try:
+                        self._try_play_locked()
+                    except DeviceUnavailable:
+                        logger.warning("Speaker unavailable; not resuming queue")
                 return
-            self._play_next_locked()
+            if self.query is None or not self.queue:
+                # new_media_status sees every session on the device, not just
+                # ours, so a FINISHED can belong to media the user started.
+                logger.info("No active playback queue; ignoring finished media")
+                return
+            if not _is_our_session(
+                finished_content_id,
+                finished_session_id,
+                self._current_content_id,
+                self._current_session_id,
+            ):
+                # Can't prove the finished session is the one we started, so it isn't
+                # ours to advance.
+                logger.info("Finished session is not the track we are playing; ignoring")
+                return
+            try:
+                self._play_next_locked()
+            except DeviceUnavailable:
+                logger.warning("Speaker unavailable; not advancing queue")
 
     def announce(self, url, content_type="audio/mpeg"):
         """Interrupt current playback (if any) to play a one-off announcement URL;
@@ -148,22 +219,30 @@ class Player:
         few seconds)."""
         with self._lock:
             self._announcing = True
+            self._announcing_content_id = url
             if 0 <= self.index < len(self.queue):
                 self._interrupted_at_seconds = time.monotonic() - self._track_started_at
             else:
                 self._interrupted_at_seconds = None
-            device = self._ensure_device()
             try:
+                device = self._ensure_device()
                 device.controller.prep_app()
                 device.controller.play_media_url(
                     url, content_type=content_type, stream_type="BUFFERED"
                 )
+                self._announcing_session_id = _media_session_id(device)
+            except DeviceUnavailable:
+                self._clear_announcing()
+                raise
             except Exception:
                 logger.exception("Failed to play announcement")
-                self._announcing = False
+                self._clear_announcing()
 
     def _play_current_locked(self, current_time=None):
         entry = self.queue[self.index]
+        # A failed attempt must not leave the previous track's ids looking like ours.
+        self._current_content_id = None
+        self._current_session_id = None
         device = self._ensure_device()
         stream = StreamInfo(entry["url"], cast_info=device._cast.cast_info)
         device.controller.prep_app()
@@ -176,6 +255,8 @@ class Player:
             current_time=current_time,
         )
         self._track_started_at = time.monotonic() - (current_time or 0)
+        self._current_content_id = stream.video_url
+        self._current_session_id = _media_session_id(device)
 
     def _play_next_locked(self):
         self.index += 1
@@ -195,6 +276,11 @@ class Player:
                 self._play_current_locked()
                 storage.record_play(self.query, entry["id"])
                 return entry
+            except DeviceUnavailable:
+                # An unreachable speaker isn't a bad track; don't skip through
+                # the queue rediscovering for every entry.
+                logger.warning("Speaker unavailable, aborting playback attempt")
+                raise
             except CastError:
                 logger.exception("Skipping unplayable track %r", entry.get("title"))
                 self._reset_cast_device_locked()
@@ -205,6 +291,10 @@ class Player:
         return None
 
     def _grow_queue_locked(self):
+        if not self.query:
+            # Without a query this would become a literal "ytsearchN:None" search.
+            logger.warning("Not growing queue: no active query")
+            return
         seen_ids = {e["id"] for e in self.queue}
         exclude_ids = seen_ids | storage.recent_ids(self.query)
         try:
@@ -222,7 +312,7 @@ class Player:
             self.query = query
             self.queue = entries
             self.index = 0
-            self._announcing = False  # a fresh /play supersedes any in-flight announcement
+            self._clear_announcing()  # a fresh /play supersedes any in-flight announcement
             played = self._try_play_locked()
         if not played:
             raise RuntimeError(f"No playable YouTube results for {query!r}")
@@ -232,7 +322,7 @@ class Player:
         with self._lock:
             if not (0 <= self.index < len(self.queue)):
                 raise RuntimeError("Nothing is playing.")
-            self._announcing = False
+            self._clear_announcing()
             self.index += 1
             played = self._try_play_locked()
         if not played:
@@ -258,8 +348,12 @@ class Player:
             self.query = None
             self.queue = []
             self.index = -1
-            self._announcing = False
-            self._ensure_device().stop()
+            self._clear_announcing()
+            try:
+                self._ensure_device().stop()
+            except DeviceUnavailable:
+                # Always clear our own state, even if the speaker can't be reached.
+                logger.warning("Speaker unavailable while stopping; cleared queue state")
 
 
 player = Player()
