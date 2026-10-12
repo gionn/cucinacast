@@ -71,18 +71,19 @@ against the real Nest Mini and confirming audio actually plays.
     finishes (`player_state == "IDLE"` and `idle_reason == "FINISHED"`) and
     auto-advances to the next queued result. That status arrives for whatever
     session is on the device, so the FINISHED handler only advances when the bot has
-    an active queue (`query` set, queue non-empty) *and* the finished `content_id` is
-    the track it loaded (`_current_content_id`); media the user started directly is
-    left alone, and `_grow_queue_locked` refuses to run without a query. When the
-    queue runs out it re-searches the same query for more results (`_grow_queue_locked`),
-    excluding both video ids already in the queue and ids from `storage.recent_ids`
-    (recently played for that query), so playback continues indefinitely until `/stop`
-    without repeating recent picks. Unplayable entries (private/removed videos) are
-    skipped automatically (`_try_play_locked`), which also records a successful play
-    via `storage.record_play` — announcement resumes (in `new_media_status`) don't call
-    `_try_play_locked`, so they aren't recorded as a new play. A discovery failure is
-    not a per-track failure: `_get_device` raises `DeviceUnavailable` and the play
-    attempt aborts instead of skipping through the queue.
+    an active queue (`query` set, queue non-empty) *and* the finished session is the
+    one it started (matched by media session id, or content id as a fallback); media
+    the user started directly is left alone, and `_grow_queue_locked` refuses to run
+    without a query. When the queue runs out it re-searches the same query for more
+    results (`_grow_queue_locked`), excluding both video ids already in the queue and
+    ids from `storage.recent_ids` (recently played for that query), so playback
+    continues indefinitely until `/stop` without repeating recent picks. Unplayable
+    entries (private/removed videos) are skipped automatically (`_try_play_locked`),
+    which also records a successful play via `storage.record_play` — announcement
+    resumes (in `new_media_status`) don't call `_try_play_locked`, so they aren't
+    recorded as a new play. A discovery failure is not a per-track failure:
+    `_get_device` raises `DeviceUnavailable` and the play attempt aborts instead of
+    skipping through the queue.
   - All device/queue mutation goes through `self._lock` since the pychromecast status
     callback fires on its own socket thread, concurrently with bot-triggered calls.
   - Casting a URL requires building a `catt.stream_info.StreamInfo` with
@@ -232,10 +233,10 @@ against the real Nest Mini and confirming audio actually plays.
   `new_media_status` FINISHED callback branches on this flag: after an
   announcement it resumes the current queue entry near where it was interrupted;
   otherwise it advances the queue as before. It only counts a finish as the
-  announcement's when the finished `content_id` matches the announcement URL, so a
-  user replacing the announcement with their own media drops the resume instead of
-  taking over. `stop()` and a fresh `/play` also clear `_announcing`, so they can't
-  leave a stale flag.
+  announcement's when it is the session the bot started (matched by media session id,
+  or content id as a fallback), so a user replacing the announcement with their own
+  media drops the resume instead of taking over. `stop()` and a fresh `/play` also
+  clear `_announcing`, so they can't leave a stale flag.
   - Resume position is approximated, not exact: `_play_current_locked` records
     `_track_started_at = time.monotonic() - (current_time or 0)` whenever it
     (re)starts a track. `announce()` captures

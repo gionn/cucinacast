@@ -46,6 +46,21 @@ def _get_device():
     raise DeviceUnavailable(f"{target} could not be found on the network") from last_error
 
 
+def _media_session_id(device):
+    status = getattr(getattr(device, "_cast", None), "media_controller", None)
+    session_id = getattr(getattr(status, "status", None), "media_session_id", None)
+    return session_id if isinstance(session_id, int) else None
+
+
+def _is_our_session(finished_content_id, finished_session_id, content_id, session_id):
+    """Whether a FINISHED status can be proven to belong to a session we started.
+    Prefer the media session id, which the device always scopes to one session; fall
+    back to the content id when it isn't reported."""
+    if session_id is not None and finished_session_id == session_id:
+        return True
+    return content_id is not None and finished_content_id == content_id
+
+
 def _fetch_live(query, fetch_count):
     opts = {"quiet": True, "extract_flat": True}
     with YoutubeDL(opts) as ydl:
@@ -91,9 +106,11 @@ class Player:
         self.index = -1
         self._announcing = False
         self._announcing_content_id = None
+        self._announcing_session_id = None
         self._track_started_at = 0
         self._interrupted_at_seconds = None
         self._current_content_id = None
+        self._current_session_id = None
 
     def _live_zconf(self):
         """Return a persistent zeroconf instance, created once and never
@@ -126,24 +143,24 @@ class Player:
             return
         with self._lock:
             finished_content_id = getattr(status, "content_id", None)
+            finished_session_id = getattr(status, "media_session_id", None)
             if self._announcing:
-                if (
-                    finished_content_id is not None
-                    and self._announcing_content_id is not None
-                    and finished_content_id != self._announcing_content_id
+                if not _is_our_session(
+                    finished_content_id,
+                    finished_session_id,
+                    self._announcing_content_id,
+                    self._announcing_session_id,
                 ):
-                    # The user replaced our announcement before it finished; drop the
-                    # pending resume rather than firing it over their media.
-                    logger.info(
-                        "Finished content %r is not our announcement (%r); dropping resume",
-                        finished_content_id,
-                        self._announcing_content_id,
-                    )
+                    # Can't prove this finish is our announcement, so the user replaced
+                    # it; drop the resume rather than firing it over their media.
+                    logger.info("Finished session is not our announcement; dropping resume")
                     self._announcing = False
                     self._announcing_content_id = None
+                    self._announcing_session_id = None
                     return
                 self._announcing = False
                 self._announcing_content_id = None
+                self._announcing_session_id = None
                 if 0 <= self.index < len(self.queue):
                     try:
                         self._play_current_locked(current_time=self._interrupted_at_seconds)
@@ -177,17 +194,15 @@ class Player:
                 # ours, so a FINISHED can belong to media the user started.
                 logger.info("No active playback queue; ignoring finished media")
                 return
-            if (
-                finished_content_id is not None
-                and self._current_content_id is not None
-                and finished_content_id != self._current_content_id
+            if not _is_our_session(
+                finished_content_id,
+                finished_session_id,
+                self._current_content_id,
+                self._current_session_id,
             ):
-                # Not the track we loaded, so not ours to advance.
-                logger.info(
-                    "Finished content %r is not the track we are playing (%r); ignoring",
-                    finished_content_id,
-                    self._current_content_id,
-                )
+                # Can't prove the finished session is the one we started, so it isn't
+                # ours to advance.
+                logger.info("Finished session is not the track we are playing; ignoring")
                 return
             try:
                 self._play_next_locked()
@@ -213,10 +228,12 @@ class Player:
                 device.controller.play_media_url(
                     url, content_type=content_type, stream_type="BUFFERED"
                 )
+                self._announcing_session_id = _media_session_id(device)
             except Exception:
                 logger.exception("Failed to play announcement")
                 self._announcing = False
                 self._announcing_content_id = None
+                self._announcing_session_id = None
 
     def _play_current_locked(self, current_time=None):
         entry = self.queue[self.index]
@@ -233,6 +250,7 @@ class Player:
         )
         self._track_started_at = time.monotonic() - (current_time or 0)
         self._current_content_id = stream.video_url
+        self._current_session_id = _media_session_id(device)
 
     def _play_next_locked(self):
         self.index += 1
@@ -290,6 +308,7 @@ class Player:
             self.index = 0
             self._announcing = False  # a fresh /play supersedes any in-flight announcement
             self._announcing_content_id = None
+            self._announcing_session_id = None
             played = self._try_play_locked()
         if not played:
             raise RuntimeError(f"No playable YouTube results for {query!r}")
@@ -301,6 +320,7 @@ class Player:
                 raise RuntimeError("Nothing is playing.")
             self._announcing = False
             self._announcing_content_id = None
+            self._announcing_session_id = None
             self.index += 1
             played = self._try_play_locked()
         if not played:
@@ -328,6 +348,7 @@ class Player:
             self.index = -1
             self._announcing = False
             self._announcing_content_id = None
+            self._announcing_session_id = None
             try:
                 self._ensure_device().stop()
             except DeviceUnavailable:
