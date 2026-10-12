@@ -69,8 +69,16 @@ against the real Nest Mini and confirming audio actually plays.
     `catt.api.CattDevice` connection and a search-result queue. It registers itself as
     a `pychromecast` media status listener (`new_media_status`) to detect when a track
     finishes (`player_state == "IDLE"` and `idle_reason == "FINISHED"`) and
-    auto-advances to the next queued result. When the queue runs out it re-searches the
-    same query for more results (`_grow_queue_locked`), excluding both video ids
+    auto-advances to the next queued result. Because that status arrives on the
+    shared device connection for *whatever* media is running, the FINISHED handler
+    only advances when the bot actually has a requested queue (`query` set, queue
+    non-empty) *and* the finished `content_id` matches the track the bot loaded
+    (`_current_content_id`, recorded in `_play_current_locked`) — otherwise media the
+    user started directly on the speaker (or a stale session) would make the bot
+    force-launch over it. For the same reason `_grow_queue_locked` refuses to run
+    with an empty query, which would otherwise become a literal `ytsearchN:None`
+    search and a self-triggered playback loop. When the queue runs out it re-searches
+    the same query for more results (`_grow_queue_locked`), excluding both video ids
     already in the queue and ids from `storage.recent_ids` (recently played for that
     query), so playback continues indefinitely until `/stop` without repeating
     recent picks. Unplayable entries (private/removed videos) are skipped
@@ -205,7 +213,11 @@ against the real Nest Mini and confirming audio actually plays.
   - Schema creation and legacy-table cleanup live in `init_db()`, called once
     at startup by `bot.main()` — `_connect()` stays free of DDL, since DDL
     takes a heavier lock than normal reads/writes. `init_db()` also drops the
-    `devices` table left by the removed Bluetooth-presence feature.
+    `devices` table left by the removed Bluetooth-presence feature, and purges
+    any `query IS NULL` rows from `plays`/`search_cache` (leftover from the
+    removed None-query playback loop). All query lookups use `query IS ?` rather
+    than `= ?` so a `None` query still compares null-safe instead of silently
+    matching nothing.
   - `plays` table backs `record_play`/`recent_ids`: each query keeps only its
     `HISTORY_LIMIT` most recent plays (older rows for that query are deleted on
     each `record_play`), so recency-based exclusion needs no unbounded memory or

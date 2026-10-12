@@ -121,7 +121,7 @@ class _FakeStreamInfo:
         self.stream_type = "BUFFERED"
 
 
-_FINISHED_STATUS = SimpleNamespace(player_state="IDLE", idle_reason="FINISHED")
+_FINISHED_STATUS = SimpleNamespace(player_state="IDLE", idle_reason="FINISHED", content_id=None)
 
 
 def test_new_media_status_ignores_non_finished_status():
@@ -133,12 +133,64 @@ def test_new_media_status_ignores_non_finished_status():
     player._play_next_locked.assert_not_called()
 
 
-def test_new_media_status_advances_queue_when_not_announcing():
+def test_new_media_status_ignores_finished_without_active_queue():
+    # A FINISHED status from media the user started directly on the device (or a
+    # stale session) must not make the bot start casting on its own.
     player = castyt.Player()
-    player._announcing = False
     player._play_next_locked = Mock()
 
     player.new_media_status(_FINISHED_STATUS)
+
+    player._play_next_locked.assert_not_called()
+
+
+def test_new_media_status_advances_queue_when_not_announcing():
+    player = castyt.Player()
+    player._announcing = False
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._play_next_locked = Mock()
+
+    player.new_media_status(_FINISHED_STATUS)
+
+    player._play_next_locked.assert_called_once()
+
+
+def test_new_media_status_ignores_foreign_media_when_queue_active():
+    # Even with an active queue, a finished session that isn't the track we
+    # loaded (e.g. the user's news) must not be treated as ours to advance.
+    player = castyt.Player()
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._current_content_id = "https://www.youtube.com/watch?v=ours"
+    player._play_next_locked = Mock()
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="IDLE", idle_reason="FINISHED", content_id="https://news.example/other"
+        )
+    )
+
+    player._play_next_locked.assert_not_called()
+
+
+def test_new_media_status_advances_when_content_id_matches():
+    player = castyt.Player()
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._current_content_id = "https://www.youtube.com/watch?v=ours"
+    player._play_next_locked = Mock()
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="IDLE",
+            idle_reason="FINISHED",
+            content_id="https://www.youtube.com/watch?v=ours",
+        )
+    )
 
     player._play_next_locked.assert_called_once()
 
@@ -372,6 +424,39 @@ def test_grow_queue_locked_swallows_search_errors(monkeypatch):
     player._grow_queue_locked()  # must not raise
 
     assert len(player.queue) == 1
+
+
+def test_grow_queue_locked_noop_without_query(monkeypatch):
+    # A None/empty query must never become a live "ytsearchN:None" search.
+    calls = []
+
+    def fake_search_youtube(query, count, exclude_ids=frozenset()):
+        calls.append(query)
+        return [{"id": "new", "title": "New", "url": "u"}]
+
+    monkeypatch.setattr(castyt, "search_youtube", fake_search_youtube)
+
+    player = castyt.Player()
+    player.query = None
+    player.queue = []
+
+    player._grow_queue_locked()
+
+    assert calls == []
+    assert player.queue == []
+
+
+def test_play_current_locked_records_content_id(monkeypatch):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+    monkeypatch.setattr(castyt, "StreamInfo", _FakeStreamInfo)
+    player = castyt.Player()
+    player.query = "q"
+    player.queue = [{"id": "a", "title": "A", "url": "u1"}]
+    player.index = 0
+
+    player._play_current_locked()
+
+    assert player._current_content_id == "u1"
 
 
 def test_play_search_raises_when_nothing_playable(monkeypatch):

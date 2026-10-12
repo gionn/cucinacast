@@ -26,6 +26,10 @@ def init_db():
             "(query TEXT, video_id TEXT, title TEXT, view_count INTEGER, fetched_at REAL)"
         )
         conn.execute("DROP TABLE IF EXISTS devices")  # legacy Bluetooth-presence table
+        # `query` is never legitimately NULL; rows under a NULL query are leftover
+        # from a bug that searched for the literal string "None". Purge them.
+        conn.execute("DELETE FROM plays WHERE query IS NULL")
+        conn.execute("DELETE FROM search_cache WHERE query IS NULL")
 
 
 def record_play(query, video_id):
@@ -35,8 +39,8 @@ def record_play(query, video_id):
             (query, video_id, time.time()),
         )
         conn.execute(
-            "DELETE FROM plays WHERE query = ? AND rowid NOT IN ("
-            "SELECT rowid FROM plays WHERE query = ? ORDER BY played_at DESC, rowid DESC LIMIT ?"
+            "DELETE FROM plays WHERE query IS ? AND rowid NOT IN ("
+            "SELECT rowid FROM plays WHERE query IS ? ORDER BY played_at DESC, rowid DESC LIMIT ?"
             ")",
             (query, query, HISTORY_LIMIT),
         )
@@ -45,7 +49,7 @@ def record_play(query, video_id):
 def recent_ids(query):
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT video_id FROM plays WHERE query = ? "
+            "SELECT video_id FROM plays WHERE query IS ? "
             "ORDER BY played_at DESC, rowid DESC LIMIT ?",
             (query, HISTORY_LIMIT),
         ).fetchall()
@@ -56,7 +60,7 @@ def cached_pool(query, min_count):
     with _connect() as conn:
         rows = conn.execute(
             "SELECT video_id, title, view_count, fetched_at FROM search_cache "
-            "WHERE query = ? ORDER BY rowid",
+            "WHERE query IS ? ORDER BY rowid",
             (query,),
         ).fetchall()
     if len(rows) < min_count:
@@ -69,7 +73,7 @@ def cached_pool(query, min_count):
 def store_pool(query, entries):
     fetched_at = time.time()
     with _connect() as conn:
-        conn.execute("DELETE FROM search_cache WHERE query = ?", (query,))
+        conn.execute("DELETE FROM search_cache WHERE query IS ?", (query,))
         conn.executemany(
             "INSERT INTO search_cache (query, video_id, title, view_count, fetched_at) "
             "VALUES (?, ?, ?, ?, ?)",

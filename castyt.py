@@ -86,6 +86,7 @@ class Player:
         self._announcing = False
         self._track_started_at = 0
         self._interrupted_at_seconds = None
+        self._current_content_id = None
 
     def _live_zconf(self):
         """Return a persistent zeroconf instance, created once and never
@@ -117,6 +118,18 @@ class Player:
         if status.player_state != "IDLE" or status.idle_reason != "FINISHED":
             return
         with self._lock:
+            finished_content_id = getattr(status, "content_id", None)
+            logger.info(
+                "Media finished: idle_reason=%s content_id=%r announcing=%s "
+                "query=%r index=%d queue=%d current_content_id=%r",
+                status.idle_reason,
+                finished_content_id,
+                self._announcing,
+                self.query,
+                self.index,
+                len(self.queue),
+                self._current_content_id,
+            )
             if self._announcing:
                 self._announcing = False
                 if 0 <= self.index < len(self.queue):
@@ -137,6 +150,27 @@ class Player:
                         )
                         self.index += 1
                     self._try_play_locked()
+                return
+            if self.query is None or not self.queue:
+                # A FINISHED status arrives on the shared device connection for
+                # whatever media is running, not just ours — e.g. media the user
+                # started directly on the speaker, or a stale session of ours. With
+                # no active /play queue there is nothing to advance, and growing the
+                # queue here would search for query=None and hijack the device.
+                logger.info("No active playback queue; ignoring finished media")
+                return
+            if (
+                finished_content_id is not None
+                and self._current_content_id is not None
+                and finished_content_id != self._current_content_id
+            ):
+                # The session that finished isn't the track we loaded, so it isn't
+                # ours to advance — the user may be playing something else.
+                logger.info(
+                    "Finished content %r is not the track we are playing (%r); ignoring",
+                    finished_content_id,
+                    self._current_content_id,
+                )
                 return
             self._play_next_locked()
 
@@ -176,6 +210,7 @@ class Player:
             current_time=current_time,
         )
         self._track_started_at = time.monotonic() - (current_time or 0)
+        self._current_content_id = stream.video_url
 
     def _play_next_locked(self):
         self.index += 1
@@ -205,6 +240,11 @@ class Player:
         return None
 
     def _grow_queue_locked(self):
+        if not self.query:
+            # Nothing was requested, so there is nothing to grow (and a None query
+            # would otherwise become a literal "ytsearchN:None" search).
+            logger.warning("Not growing queue: no active query")
+            return
         seen_ids = {e["id"] for e in self.queue}
         exclude_ids = seen_ids | storage.recent_ids(self.query)
         try:
