@@ -59,15 +59,23 @@ against the real Nest Mini and confirming audio actually plays.
 
 `tests/test_integration_device.py` is the one exception that drives the real
 speaker. It is skipped unless `CUCINACAST_INTEGRATION=1`, so it never runs in CI
-or a plain `pytest`. It searches `CUCINACAST_IT_QUERY` (default
-`daft punk one more time`), plays the top result, interrupts it with a real
-gTTS announcement, asserts the same track resumes near the interrupted
-position (`_interrupted_at_seconds`, within `RESUME_DRIFT_ALLOWANCE_SECONDS`),
-then waits for that track to finish and asserts the queue auto-advances to the
-next entry before stopping playback and disconnecting. Because the song has to
-end for the last step, point `CUCINACAST_IT_QUERY` at something short, or raise
-`CUCINACAST_IT_FINISH_TIMEOUT` (default 600s); the other knobs are
-`CUCINACAST_IT_START_TIMEOUT` and `CUCINACAST_IT_STATUS_TIMEOUT`.
+or a plain `pytest`. It holds two tests:
+
+- `test_search_and_stop_playback` is the quick smoke test. It searches
+  `CUCINACAST_IT_PLAY_QUERY` (default `nokia tune`), plays whatever came first and
+  stops `PLAY_SECONDS` later. Select it alone with `-k stop`.
+- `test_play_announce_resume_then_advance_to_next_track` is the full run. It
+  searches `CUCINACAST_IT_QUERY` (default `nokia 3310 classic ringtone`), plays a
+  result, interrupts it with a real gTTS announcement, asserts the same track
+  resumes near the interrupted position (`_interrupted_at_seconds`, within
+  `RESUME_DRIFT_ALLOWANCE_SECONDS`), then waits for that track to finish and
+  asserts the queue auto-advances to the next entry before stopping it. The
+  search pool is shuffled, so the track is whichever entry happens to be first;
+  it has to outlast the 10s wait before the announcement, or the interrupt step
+  has nothing to interrupt. Raise `CUCINACAST_IT_FINISH_TIMEOUT` (default 600s)
+  when the track is long; the other knobs are `CUCINACAST_IT_START_TIMEOUT` and
+  `CUCINACAST_IT_STATUS_TIMEOUT`.
+
 `announce.synthesize_and_serve` overwrites `tts.DEFAULT_PATH`, so it can race a
 real announcement from a running bot — stop the service first.
 

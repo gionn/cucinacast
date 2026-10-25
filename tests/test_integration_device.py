@@ -6,9 +6,11 @@ and the announce HTTP port reachable from the device:
 
     CUCINACAST_INTEGRATION=1 ./.venv/bin/python -m pytest tests/test_integration_device.py -s
 
-The auto-advance step waits for the first search result to actually end, so a
-default query returns full-length songs and the run takes minutes. Point
-CUCINACAST_IT_QUERY at something short to keep it quick.
+Two tests live here. test_search_and_stop_playback is the quick smoke test: it
+plays a search result and stops PLAY_SECONDS later. test_play_announce_resume_
+then_advance_to_next_track is the full run, and it lasts as long as the track it
+picks, since auto-advance only happens when that track ends. Run just the quick
+one with `-k stop`.
 """
 
 import logging
@@ -36,7 +38,9 @@ if os.environ.get("CUCINACAST_INTEGRATION") != "1":
 # plain suite never inherits NEST_DEVICE_NAME and friends.
 load_dotenv()
 
-QUERY = os.environ.get("CUCINACAST_IT_QUERY", "daft punk one more time")
+QUERY = os.environ.get("CUCINACAST_IT_QUERY", "nokia 3310 classic ringtone")
+PLAY_QUERY = os.environ.get("CUCINACAST_IT_PLAY_QUERY", "nokia tune")
+PLAY_SECONDS = 5
 ANNOUNCEMENT_TEXT = (
     "This is the CucinaCast integration test announcement. Playback should resume in a moment."
 )
@@ -71,6 +75,55 @@ def _playing(status):
     return status["player_state"] == "PLAYING"
 
 
+def _our_playing(player, status):
+    return (
+        _playing(status)
+        and player._current_session_id is not None
+        and status["media_session_id"] == player._current_session_id
+    )
+
+
+def _stop_and_disconnect(player):
+    try:
+        player.stop()
+    except Exception:
+        logger.exception("Failed to stop playback during teardown")
+    try:
+        if player._device is not None:
+            player._device._cast.disconnect()
+    except Exception:
+        logger.exception("Failed to disconnect from the speaker during teardown")
+
+
+def test_search_and_stop_playback():
+    """The quick smoke test: search, start playing, stop PLAY_SECONDS later."""
+    player = castyt.Player()
+    try:
+        title, url = player.play_search(PLAY_QUERY)
+        logger.info("Playing %r (%s)", title, url)
+        _wait_for_status(
+            player,
+            lambda s: _our_playing(player, s),
+            START_TIMEOUT_SECONDS,
+            f"{title!r} to start playing",
+        )
+
+        time.sleep(PLAY_SECONDS)
+        player.stop()
+
+        _wait_for_status(
+            player,
+            lambda s: not _playing(s),
+            STATUS_TIMEOUT_SECONDS,
+            "playback to stop",
+        )
+        assert player.query is None
+        assert player.queue == []
+        assert player.index == -1
+    finally:
+        _stop_and_disconnect(player)
+
+
 def test_play_announce_resume_then_advance_to_next_track():
     player = castyt.Player()
     try:
@@ -81,11 +134,7 @@ def test_play_announce_resume_then_advance_to_next_track():
         logger.info("Playing %r (%s)", title, url)
         started = _wait_for_status(
             player,
-            lambda s: (
-                _playing(s)
-                and player._current_session_id is not None
-                and s["media_session_id"] == player._current_session_id
-            ),
+            lambda s: _our_playing(player, s),
             START_TIMEOUT_SECONDS,
             f"{title!r} to start playing",
         )
@@ -109,12 +158,7 @@ def test_play_announce_resume_then_advance_to_next_track():
 
         resumed = _wait_for_status(
             player,
-            lambda s: (
-                _playing(s)
-                and not player._announcing
-                and player._current_session_id is not None
-                and s["media_session_id"] == player._current_session_id
-            ),
+            lambda s: not player._announcing and _our_playing(player, s),
             STATUS_TIMEOUT_SECONDS,
             "the interrupted track to resume after the announcement",
         )
@@ -133,12 +177,7 @@ def test_play_announce_resume_then_advance_to_next_track():
 
         next_status = _wait_for_status(
             player,
-            lambda s: (
-                player.index == 1
-                and _playing(s)
-                and player._current_session_id is not None
-                and s["media_session_id"] == player._current_session_id
-            ),
+            lambda s: player.index == 1 and _our_playing(player, s),
             FINISH_TIMEOUT_SECONDS,
             "the first track to finish and the next one to auto-advance",
         )
@@ -157,12 +196,4 @@ def test_play_announce_resume_then_advance_to_next_track():
         assert player.queue == []
         assert player.index == -1
     finally:
-        try:
-            player.stop()
-        except Exception:
-            logger.exception("Failed to stop playback during teardown")
-        try:
-            if player._device is not None:
-                player._device._cast.disconnect()
-        except Exception:
-            logger.exception("Failed to disconnect from the speaker during teardown")
+        _stop_and_disconnect(player)
