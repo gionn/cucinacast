@@ -8,6 +8,7 @@ import time
 
 import zeroconf
 from catt.api import CattDevice
+from catt.discovery import get_cast_infos
 from catt.error import CastError
 from catt.stream_info import StreamInfo
 from yt_dlp import YoutubeDL
@@ -31,12 +32,22 @@ def _nest_device_name():
     return os.environ.get("NEST_DEVICE_NAME")
 
 
+def _discover_cast():
+    """Return the host of the first Chromecast found on the LAN, for installs that
+    don't pin NEST_DEVICE_NAME. Sorted so several speakers always resolve to the
+    same one."""
+    infos = sorted(get_cast_infos(), key=lambda info: info.friendly_name)
+    if not infos:
+        raise CastError("No Chromecast found on the network")
+    return infos[0].host
+
+
 def _get_device():
     last_error = None
     for attempt in range(DISCOVERY_RETRIES):
         try:
             name = _nest_device_name()
-            return CattDevice(name) if name else CattDevice()
+            return CattDevice(name) if name else CattDevice(ip_addr=_discover_cast())
         except CastError as exc:
             last_error = exc
             if attempt < DISCOVERY_RETRIES - 1:

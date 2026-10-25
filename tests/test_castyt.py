@@ -783,7 +783,43 @@ def test_stop_resets_player_state(monkeypatch):
     fake_device.stop.assert_called_once()
 
 
+def test_get_device_uses_the_configured_name(monkeypatch):
+    monkeypatch.setenv("NEST_DEVICE_NAME", "Cucinino")
+    monkeypatch.setattr(castyt, "CattDevice", Mock(return_value=Mock()))
+
+    castyt._get_device()
+
+    castyt.CattDevice.assert_called_once_with("Cucinino")
+
+
+def test_get_device_discovers_a_cast_when_no_name_is_set(monkeypatch):
+    monkeypatch.delenv("NEST_DEVICE_NAME", raising=False)
+    monkeypatch.setattr(
+        castyt,
+        "get_cast_infos",
+        lambda: [
+            SimpleNamespace(friendly_name="Cucinino", host="192.168.1.50"),
+            SimpleNamespace(friendly_name="Salotto", host="192.168.1.60"),
+        ],
+    )
+    monkeypatch.setattr(castyt, "CattDevice", Mock(return_value=Mock()))
+
+    castyt._get_device()
+
+    castyt.CattDevice.assert_called_once_with(ip_addr="192.168.1.50")
+
+
+def test_get_device_raises_device_unavailable_when_no_cast_is_found(monkeypatch):
+    monkeypatch.delenv("NEST_DEVICE_NAME", raising=False)
+    monkeypatch.setattr(castyt, "DISCOVERY_RETRIES", 1)
+    monkeypatch.setattr(castyt, "get_cast_infos", lambda: [])
+
+    with pytest.raises(castyt.DeviceUnavailable):
+        castyt._get_device()
+
+
 def test_get_device_raises_device_unavailable(monkeypatch):
+    monkeypatch.setenv("NEST_DEVICE_NAME", "Cucinino")
     monkeypatch.setattr(castyt, "DISCOVERY_RETRIES", 2)
     monkeypatch.setattr(castyt.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(castyt, "CattDevice", Mock(side_effect=CastError("nope")))
