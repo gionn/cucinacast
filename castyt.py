@@ -133,7 +133,7 @@ class Player:
         the device from scratch."""
         if self._device is not None:
             try:
-                self._device._cast.disconnect(blocking=False)
+                self._device._cast.disconnect(timeout=0)
             except Exception:
                 logger.exception("Error disconnecting stale Chromecast device")
             self._device = None

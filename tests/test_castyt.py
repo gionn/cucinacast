@@ -601,7 +601,7 @@ def test_try_play_locked_skips_entry_on_cast_error(monkeypatch):
 
     assert entry["id"] == "b"
     assert player.index == 1
-    devices[0]._cast.disconnect.assert_called_once_with(blocking=False)
+    devices[0]._cast.disconnect.assert_called_once_with(timeout=0)
 
 
 def test_try_play_locked_skips_entry_on_generic_error_without_reset(monkeypatch):
