@@ -123,9 +123,9 @@ dev dependencies plus `pre-commit`, and registers the git hooks.
 
 `requirements-dev.txt` pulls in `requirements.txt` plus `pytest`. The test suite
 covers search/casting, the bot handlers, motion detection, announcements/TTS and
-storage, with network, device and Telegram I/O mocked. Exercising the real speaker
-is a separate opt-in test (`tests/test_integration_device.py`, enabled with
-`CUCINACAST_INTEGRATION=1`); `AGENTS.md` has the details and its prerequisites.
+storage, with network, device and Telegram I/O mocked. Nothing exercises the real
+speaker automatically, so verify casting changes by running the bot against the
+Nest Mini.
 
 ## Bot commands
 

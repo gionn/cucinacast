@@ -42,26 +42,10 @@ requiring a configured default device.
 `tests/conftest.py` repoints `storage.DB_PATH` at a per-test temp directory and
 sets fake Telegram env vars, so tests never touch the real `cucinacast.db`.
 
-`tests/test_integration_device.py` is the only test that drives the real speaker.
-It skips unless `CUCINACAST_INTEGRATION=1`, and only then loads `.env`. It needs
-the speaker reachable on the LAN, yt-dlp/YouTube, gTTS, and the announce port
-reachable from the device. Stop the bot service first: both overwrite
-`tts.DEFAULT_PATH`, so an announcement can race a live one.
-
-```
-# quick: search, play, stop a few seconds later (~10s)
-CUCINACAST_INTEGRATION=1 .venv/bin/python -m pytest tests/test_integration_device.py -k stop
-
-# both, including resume-after-announcement and auto-advance (waits for a track to end)
-CUCINACAST_INTEGRATION=1 .venv/bin/python -m pytest tests/test_integration_device.py -s
-```
-
-Knobs are `CUCINACAST_IT_PLAY_QUERY` (quick test) and `CUCINACAST_IT_QUERY` (full
-test), plus `CUCINACAST_IT_{START,STATUS,FINISH}_TIMEOUT`. The search pool is
-ranked by views and then shuffled, so a run plays a random entry from the top 20
-rather than a stable "top result". The full test skips results outside a 15-90s
-remaining window and interrupts whatever is playing at that point, so neither a
-5s clip nor a ten-minute compilation can derail the run.
+Nothing drives the real speaker, camera or Telegram API automatically. Check
+casting and motion changes by running `bot.py` against the Nest Mini. Stop the
+service first when you also trigger `/announce`, since both write
+`tts.DEFAULT_PATH`.
 
 ## Architecture
 
