@@ -49,6 +49,11 @@ STATUS_TIMEOUT_SECONDS = float(os.environ.get("CUCINACAST_IT_STATUS_TIMEOUT", "6
 FINISH_TIMEOUT_SECONDS = float(os.environ.get("CUCINACAST_IT_FINISH_TIMEOUT", "600"))
 POLL_INTERVAL_SECONDS = 0.5
 INTERRUPT_AFTER_SECONDS = 10
+# Skip results too short to interrupt or too long to wait out, so the full test
+# finishes in a minute or two whatever the shuffled search returns.
+MIN_REMAINING_SECONDS = 15
+MAX_REMAINING_SECONDS = 90
+MAX_SKIPS = 20
 # Resume is approximated from wall-clock elapsed time, so it drifts by the
 # buffering delay between issuing the load and the receiver actually playing.
 RESUME_DRIFT_ALLOWANCE_SECONDS = 15
@@ -75,12 +80,12 @@ def _playing(status):
     return status["player_state"] == "PLAYING"
 
 
+def _playing_session(status, session_id):
+    return _playing(status) and session_id is not None and status["media_session_id"] == session_id
+
+
 def _our_playing(player, status):
-    return (
-        _playing(status)
-        and player._current_session_id is not None
-        and status["media_session_id"] == player._current_session_id
-    )
+    return _playing_session(status, player._current_session_id)
 
 
 def _stop_and_disconnect(player):
@@ -96,17 +101,36 @@ def _stop_and_disconnect(player):
 
 
 def _start_playback(player, query):
-    """Search and wait for the result to be playing, returning the status that
-    confirmed it."""
+    """Search and wait for the result to start playing."""
     title, url = player.play_search(query)
     logger.info("Playing %r (%s)", title, url)
-    status = _wait_for_status(
+    _wait_for_status(
         player,
         lambda s: _our_playing(player, s),
         START_TIMEOUT_SECONDS,
         f"{title!r} to start playing",
     )
-    return title, url, status
+
+
+def _playing_with_remaining(player, min_remaining, max_remaining):
+    """Return the status of our currently playing track, skipping results with
+    too little left to interrupt or too much left to wait out."""
+    for _ in range(MAX_SKIPS):
+        status = _wait_for_status(
+            player,
+            lambda s: _our_playing(player, s),
+            START_TIMEOUT_SECONDS,
+            "a track to be playing",
+        )
+        remaining = (status["duration"] or 0) - status["current_time"]
+        if min_remaining <= remaining <= max_remaining:
+            return status
+        logger.info("Skipping %r with %.0fs left", status["media_metadata"].get("title"), remaining)
+        player.skip()
+    raise AssertionError(
+        f"no track between {min_remaining:g}s and {max_remaining:g}s left "
+        f"after skipping {MAX_SKIPS} results"
+    )
 
 
 def _stop_playback(player):
@@ -139,23 +163,30 @@ def test_play_announce_resume_then_advance_to_next_track():
         announcement_url = announce.synthesize_and_serve(ANNOUNCEMENT_TEXT)
         assert tts.DEFAULT_PATH.stat().st_size > 0, "TTS produced an empty announcement file"
 
-        title, url, started = _start_playback(player, QUERY)
-        track_title = started["media_metadata"].get("title")
-        track_session_id = player._current_session_id
+        _start_playback(player, QUERY)
 
         time.sleep(INTERRUPT_AFTER_SECONDS)
+        # The pool is shuffled and a short result can end during the wait, so
+        # interrupt whatever is playing now, with enough left to come back to.
+        interrupted = _playing_with_remaining(player, MIN_REMAINING_SECONDS, MAX_REMAINING_SECONDS)
+        track_index = player.index
+        track_url = player.queue[track_index]["url"]
+        track_title = interrupted["media_metadata"].get("title")
+        track_session_id = player._current_session_id
         player.announce(announcement_url)
         interrupted_at = player._interrupted_at_seconds
         assert interrupted_at and interrupted_at > 0, "no interrupted position was recorded"
 
         _wait_for_status(
             player,
-            lambda s: _playing(s) and s["content_id"] == announcement_url,
+            lambda s: (
+                s["content_id"] == announcement_url
+                and _playing_session(s, player._announcing_session_id)
+            ),
             STATUS_TIMEOUT_SECONDS,
             "the announcement to take over playback",
         )
         announcement_session_id = player._announcing_session_id
-        assert announcement_session_id is not None, "announcement session id was never captured"
         assert announcement_session_id != track_session_id
 
         resumed = _wait_for_status(
@@ -164,11 +195,10 @@ def test_play_announce_resume_then_advance_to_next_track():
             STATUS_TIMEOUT_SECONDS,
             "the interrupted track to resume after the announcement",
         )
-        assert player.index == 0
+        assert player.index == track_index
         # Resuming re-resolves the stream, so the content id is a fresh signed
-        # URL and only the queue entry and the device-reported title identify
+        # URL and only the queue position and the device-reported title identify
         # the track.
-        assert player.queue[0]["url"] == url, "resumed a different track"
         assert resumed["media_metadata"].get("title") == track_title, "resumed a different track"
         assert resumed["media_session_id"] != announcement_session_id
         position = resumed["current_time"]
@@ -177,14 +207,15 @@ def test_play_announce_resume_then_advance_to_next_track():
             f"resumed at {position:g}s but was interrupted at {interrupted_at:g}s"
         )
 
+        # Skips unplayable entries, so the next index can jump past track_index + 1.
         next_status = _wait_for_status(
             player,
-            lambda s: player.index == 1 and _our_playing(player, s),
+            lambda s: player.index > track_index and _our_playing(player, s),
             FINISH_TIMEOUT_SECONDS,
             "the first track to finish and the next one to auto-advance",
         )
         assert next_status["content_id"] == player._current_content_id
-        assert player.queue[1]["url"] != url
+        assert player.queue[player.index]["url"] != track_url
         logger.info("Auto-advanced to %r", player.queue[player.index]["title"])
 
         _stop_playback(player)

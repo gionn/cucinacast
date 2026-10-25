@@ -59,8 +59,9 @@ CUCINACAST_INTEGRATION=1 .venv/bin/python -m pytest tests/test_integration_devic
 Knobs are `CUCINACAST_IT_PLAY_QUERY` (quick test) and `CUCINACAST_IT_QUERY` (full
 test), plus `CUCINACAST_IT_{START,STATUS,FINISH}_TIMEOUT`. The search pool is
 ranked by views and then shuffled, so a run plays a random entry from the top 20
-rather than a stable "top result"; if that entry ends before the 10s wait, the
-queue advances on its own and the full test's index assertions fail.
+rather than a stable "top result". The full test skips results outside a 15-90s
+remaining window and interrupts whatever is playing at that point, so neither a
+5s clip nor a ten-minute compilation can derail the run.
 
 ## Architecture
 
