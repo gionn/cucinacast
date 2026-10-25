@@ -47,7 +47,9 @@ def _get_device():
     for attempt in range(DISCOVERY_RETRIES):
         try:
             name = _nest_device_name()
-            return CattDevice(name) if name else CattDevice(ip_addr=_discover_cast())
+            if name:
+                return CattDevice(name)
+            return CattDevice(ip_addr=_discover_cast())
         except CastError as exc:
             last_error = exc
             if attempt < DISCOVERY_RETRIES - 1:

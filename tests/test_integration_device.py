@@ -95,31 +95,40 @@ def _stop_and_disconnect(player):
         logger.exception("Failed to disconnect from the speaker during teardown")
 
 
+def _start_playback(player, query):
+    """Search and wait for the result to be playing, returning the status that
+    confirmed it."""
+    title, url = player.play_search(query)
+    logger.info("Playing %r (%s)", title, url)
+    status = _wait_for_status(
+        player,
+        lambda s: _our_playing(player, s),
+        START_TIMEOUT_SECONDS,
+        f"{title!r} to start playing",
+    )
+    return title, url, status
+
+
+def _stop_playback(player):
+    player.stop()
+    _wait_for_status(
+        player,
+        lambda s: not _playing(s),
+        STATUS_TIMEOUT_SECONDS,
+        "playback to stop",
+    )
+    assert player.query is None
+    assert player.queue == []
+    assert player.index == -1
+
+
 def test_search_and_stop_playback():
     """The quick smoke test: search, start playing, stop PLAY_SECONDS later."""
     player = castyt.Player()
     try:
-        title, url = player.play_search(PLAY_QUERY)
-        logger.info("Playing %r (%s)", title, url)
-        _wait_for_status(
-            player,
-            lambda s: _our_playing(player, s),
-            START_TIMEOUT_SECONDS,
-            f"{title!r} to start playing",
-        )
-
+        _start_playback(player, PLAY_QUERY)
         time.sleep(PLAY_SECONDS)
-        player.stop()
-
-        _wait_for_status(
-            player,
-            lambda s: not _playing(s),
-            STATUS_TIMEOUT_SECONDS,
-            "playback to stop",
-        )
-        assert player.query is None
-        assert player.queue == []
-        assert player.index == -1
+        _stop_playback(player)
     finally:
         _stop_and_disconnect(player)
 
@@ -130,14 +139,7 @@ def test_play_announce_resume_then_advance_to_next_track():
         announcement_url = announce.synthesize_and_serve(ANNOUNCEMENT_TEXT)
         assert tts.DEFAULT_PATH.stat().st_size > 0, "TTS produced an empty announcement file"
 
-        title, url = player.play_search(QUERY)
-        logger.info("Playing %r (%s)", title, url)
-        started = _wait_for_status(
-            player,
-            lambda s: _our_playing(player, s),
-            START_TIMEOUT_SECONDS,
-            f"{title!r} to start playing",
-        )
+        title, url, started = _start_playback(player, QUERY)
         track_title = started["media_metadata"].get("title")
         track_session_id = player._current_session_id
 
@@ -185,15 +187,6 @@ def test_play_announce_resume_then_advance_to_next_track():
         assert player.queue[1]["url"] != url
         logger.info("Auto-advanced to %r", player.queue[player.index]["title"])
 
-        player.stop()
-        _wait_for_status(
-            player,
-            lambda s: not _playing(s),
-            STATUS_TIMEOUT_SECONDS,
-            "playback to stop",
-        )
-        assert player.query is None
-        assert player.queue == []
-        assert player.index == -1
+        _stop_playback(player)
     finally:
         _stop_and_disconnect(player)

@@ -121,7 +121,16 @@ class _FakeStreamInfo:
         self.stream_type = "BUFFERED"
 
 
-_FINISHED_STATUS = SimpleNamespace(player_state="IDLE", idle_reason="FINISHED", content_id=None)
+def _media_status(content_id=None, session_id=None, state="PLAYING", idle_reason=None):
+    return SimpleNamespace(
+        player_state=state,
+        idle_reason=idle_reason,
+        content_id=content_id,
+        media_session_id=session_id,
+    )
+
+
+_FINISHED_STATUS = _media_status(state="IDLE", idle_reason="FINISHED")
 
 
 def test_new_media_status_ignores_non_finished_status():
@@ -223,18 +232,12 @@ def test_captures_track_session_id_from_device_status():
     player._current_content_id = "u"
     player._play_next_locked = Mock()
 
-    player.new_media_status(
-        SimpleNamespace(
-            player_state="PLAYING", idle_reason=None, content_id="u", media_session_id=7
-        )
-    )
+    player.new_media_status(_media_status(content_id="u", session_id=7))
 
     assert player._current_session_id == 7
 
     player.new_media_status(
-        SimpleNamespace(
-            player_state="IDLE", idle_reason="FINISHED", content_id="u", media_session_id=7
-        )
+        _media_status(content_id="u", session_id=7, state="IDLE", idle_reason="FINISHED")
     )
 
     player._play_next_locked.assert_called_once()
@@ -244,11 +247,7 @@ def test_does_not_capture_session_id_for_other_content():
     player = castyt.Player()
     player._current_content_id = "u"
 
-    player.new_media_status(
-        SimpleNamespace(
-            player_state="PLAYING", idle_reason=None, content_id="other", media_session_id=7
-        )
-    )
+    player.new_media_status(_media_status(content_id="other", session_id=7))
 
     assert player._current_session_id is None
 
@@ -257,31 +256,22 @@ def test_captures_announcement_session_id_from_device_status():
     # Regression: the id read straight after play_media_url was the previous
     # announcement's, so the announcement's own FINISHED was rejected as someone
     # else's and the resume was dropped.
+    announcement_url = "http://host/announce.mp3"
     player = castyt.Player()
     player._announcing = True
-    player._announcing_content_id = "http://host/announce.mp3"
+    player._announcing_content_id = announcement_url
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
     player._interrupted_at_seconds = 12.3
     player._play_current_locked = Mock()
 
-    player.new_media_status(
-        SimpleNamespace(
-            player_state="PLAYING",
-            idle_reason=None,
-            content_id="http://host/announce.mp3",
-            media_session_id=9,
-        )
-    )
+    player.new_media_status(_media_status(content_id=announcement_url, session_id=9))
 
     assert player._announcing_session_id == 9
 
     player.new_media_status(
-        SimpleNamespace(
-            player_state="IDLE",
-            idle_reason="FINISHED",
-            content_id="http://host/announce.mp3",
-            media_session_id=9,
+        _media_status(
+            content_id=announcement_url, session_id=9, state="IDLE", idle_reason="FINISHED"
         )
     )
 
@@ -355,39 +345,27 @@ def test_ignores_terminal_status_of_replaced_announcement_when_capturing_session
     # Announcing a second time resets the captured id while the first
     # announcement's terminal status is still in flight. Claiming that stale id
     # makes the new announcement's FINISHED fail the match and drops the resume.
+    announcement_url = "http://host/announce.mp3"
     player = castyt.Player()
     player._announcing = True
-    player._announcing_content_id = "http://host/announce.mp3"
+    player._announcing_content_id = announcement_url
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
     player._interrupted_at_seconds = 12.3
     player._play_current_locked = Mock()
 
     player.new_media_status(
-        SimpleNamespace(
-            player_state="IDLE",
-            idle_reason="CANCELLED",
-            content_id="http://host/announce.mp3",
-            media_session_id=1,
+        _media_status(
+            content_id=announcement_url, session_id=1, state="IDLE", idle_reason="CANCELLED"
         )
     )
-    player.new_media_status(
-        SimpleNamespace(
-            player_state="PLAYING",
-            idle_reason=None,
-            content_id="http://host/announce.mp3",
-            media_session_id=2,
-        )
-    )
+    player.new_media_status(_media_status(content_id=announcement_url, session_id=2))
 
     assert player._announcing_session_id == 2
 
     player.new_media_status(
-        SimpleNamespace(
-            player_state="IDLE",
-            idle_reason="FINISHED",
-            content_id="http://host/announce.mp3",
-            media_session_id=2,
+        _media_status(
+            content_id=announcement_url, session_id=2, state="IDLE", idle_reason="FINISHED"
         )
     )
 
