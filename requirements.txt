@@ -1,8 +1,8 @@
-catt
-zeroconf
-yt-dlp
-python-telegram-bot
-python-dotenv
-onvif-zeep-async
-WSDiscovery
-gTTS
+catt==0.13.1
+zeroconf==0.151.1
+yt-dlp==2026.8.19
+python-telegram-bot==22.8
+python-dotenv==1.2.3
+onvif-zeep-async==4.2.1
+WSDiscovery==2.1.2
+gTTS==2.5.4

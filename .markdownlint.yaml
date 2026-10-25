@@ -1,0 +1,4 @@
+# Prose is hand-wrapped rather than reflowed, and most fenced blocks are
+# plain command/env listings without a meaningful language.
+MD013: false
+MD040: false
