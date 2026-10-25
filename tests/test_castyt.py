@@ -351,6 +351,49 @@ def test_new_media_status_ignores_when_session_ids_differ_even_if_content_matche
     player._try_play_locked.assert_not_called()
 
 
+def test_ignores_terminal_status_of_replaced_announcement_when_capturing_session():
+    # Announcing a second time resets the captured id while the first
+    # announcement's terminal status is still in flight. Claiming that stale id
+    # makes the new announcement's FINISHED fail the match and drops the resume.
+    player = castyt.Player()
+    player._announcing = True
+    player._announcing_content_id = "http://host/announce.mp3"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="IDLE",
+            idle_reason="CANCELLED",
+            content_id="http://host/announce.mp3",
+            media_session_id=1,
+        )
+    )
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="PLAYING",
+            idle_reason=None,
+            content_id="http://host/announce.mp3",
+            media_session_id=2,
+        )
+    )
+
+    assert player._announcing_session_id == 2
+
+    player.new_media_status(
+        SimpleNamespace(
+            player_state="IDLE",
+            idle_reason="FINISHED",
+            content_id="http://host/announce.mp3",
+            media_session_id=2,
+        )
+    )
+
+    player._play_current_locked.assert_called_once_with(current_time=12.3)
+
+
 def test_new_media_status_resumes_after_announcement(monkeypatch):
     player = castyt.Player()
     player._announcing = True

@@ -148,6 +148,11 @@ class Player:
         session_id = getattr(status, "media_session_id", None)
         if content_id is None or not isinstance(session_id, int):
             return
+        if getattr(status, "player_state", None) == "IDLE":
+            # A terminal status belongs to the session that just ended, which may
+            # be an announcement this one replaced; claiming its id would make our
+            # own FINISHED fail the match.
+            return
         with self._lock:
             if (
                 self._announcing
