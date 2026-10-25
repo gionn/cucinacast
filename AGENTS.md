@@ -34,6 +34,11 @@ python3 -m venv .venv
 # storage logic; everything else is still verified manually, see below)
 ./.venv/bin/python -m pytest
 
+# end-to-end playback check against the real Nest Mini (play, announce,
+# verify the resume, auto-advance to the next track, stop); needs the speaker,
+# LAN access to YouTube/Google TTS, and the announce port reachable from it
+CUCINACAST_INTEGRATION=1 ./.venv/bin/python -m pytest tests/test_integration_device.py -s
+
 # install/refresh as a systemd service (creates .venv, installs deps every run)
 ./setup.sh
 ```
@@ -51,6 +56,20 @@ logic in `storage.py` (`tests/`), with the actual `yt-dlp`/sqlite calls
 mocked/isolated. Everything that touches the real Chromecast, camera, or Telegram
 API still has no automated coverage — verify those manually by running the bot
 against the real Nest Mini and confirming audio actually plays.
+
+`tests/test_integration_device.py` is the one exception that drives the real
+speaker. It is skipped unless `CUCINACAST_INTEGRATION=1`, so it never runs in CI
+or a plain `pytest`. It searches `CUCINACAST_IT_QUERY` (default
+`daft punk one more time`), plays the top result, interrupts it with a real
+gTTS announcement, asserts the same track resumes near the interrupted
+position (`_interrupted_at_seconds`, within `RESUME_DRIFT_ALLOWANCE_SECONDS`),
+then waits for that track to finish and asserts the queue auto-advances to the
+next entry before stopping playback and disconnecting. Because the song has to
+end for the last step, point `CUCINACAST_IT_QUERY` at something short, or raise
+`CUCINACAST_IT_FINISH_TIMEOUT` (default 600s); the other knobs are
+`CUCINACAST_IT_START_TIMEOUT` and `CUCINACAST_IT_STATUS_TIMEOUT`.
+`announce.synthesize_and_serve` overwrites `tts.DEFAULT_PATH`, so it can race a
+real announcement from a running bot — stop the service first.
 
 ## Architecture
 
