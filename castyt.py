@@ -8,6 +8,7 @@ import time
 
 import zeroconf
 from catt.api import CattDevice
+from catt.discovery import get_cast_infos
 from catt.error import CastError
 from catt.stream_info import StreamInfo
 from yt_dlp import YoutubeDL
@@ -31,12 +32,24 @@ def _nest_device_name():
     return os.environ.get("NEST_DEVICE_NAME")
 
 
+def _discover_cast():
+    """Return the host of the first Chromecast found on the LAN, for installs that
+    don't pin NEST_DEVICE_NAME. Sorted so several speakers always resolve to the
+    same one."""
+    infos = sorted(get_cast_infos(), key=lambda info: info.friendly_name)
+    if not infos:
+        raise CastError("No Chromecast found on the network")
+    return infos[0].host
+
+
 def _get_device():
     last_error = None
     for attempt in range(DISCOVERY_RETRIES):
         try:
             name = _nest_device_name()
-            return CattDevice(name) if name else CattDevice()
+            if name:
+                return CattDevice(name)
+            return CattDevice(ip_addr=_discover_cast())
         except CastError as exc:
             last_error = exc
             if attempt < DISCOVERY_RETRIES - 1:
@@ -44,12 +57,6 @@ def _get_device():
     name = _nest_device_name()
     target = f"Chromecast {name!r}" if name else "Chromecast"
     raise DeviceUnavailable(f"{target} could not be found on the network") from last_error
-
-
-def _media_session_id(device):
-    status = getattr(getattr(device, "_cast", None), "media_controller", None)
-    session_id = getattr(getattr(status, "status", None), "media_session_id", None)
-    return session_id if isinstance(session_id, int) else None
 
 
 def _is_our_session(finished_content_id, finished_session_id, content_id, session_id):
@@ -139,13 +146,41 @@ class Player:
         the device from scratch."""
         if self._device is not None:
             try:
-                self._device._cast.disconnect(blocking=False)
+                self._device._cast.disconnect(timeout=0)
             except Exception:
                 logger.exception("Error disconnecting stale Chromecast device")
             self._device = None
 
+    def _capture_session_id(self, status):
+        """Record the session id of the media we just loaded, once the device
+        reports it as current. catt's `block_until_active` only waits for *any*
+        active session, which can still be the previous one, so reading the id
+        straight after `play_media_url` can pick up a stale value and make our
+        own media's FINISHED look like someone else's."""
+        content_id = getattr(status, "content_id", None)
+        session_id = getattr(status, "media_session_id", None)
+        if content_id is None or not isinstance(session_id, int):
+            return
+        if getattr(status, "player_state", None) == "IDLE":
+            # A terminal status belongs to the session that just ended, which may
+            # be an announcement this one replaced; claiming its id would make our
+            # own FINISHED fail the match.
+            return
+        with self._lock:
+            if (
+                self._announcing
+                and self._announcing_session_id is None
+                and content_id == self._announcing_content_id
+            ):
+                self._announcing_session_id = session_id
+                logger.info("Announcement running as session %s", session_id)
+            elif self._current_session_id is None and content_id == self._current_content_id:
+                self._current_session_id = session_id
+                logger.info("Track running as session %s", session_id)
+
     def new_media_status(self, status):
         if status.player_state != "IDLE" or status.idle_reason != "FINISHED":
+            self._capture_session_id(status)
             return
         with self._lock:
             finished_content_id = getattr(status, "content_id", None)
@@ -159,7 +194,14 @@ class Player:
                 ):
                     # Can't prove this finish is our announcement, so the user replaced
                     # it; drop the resume rather than firing it over their media.
-                    logger.info("Finished session is not our announcement; dropping resume")
+                    logger.info(
+                        "Finished session %s (content %r) is not our announcement "
+                        "session %s (content %r); dropping resume",
+                        finished_session_id,
+                        finished_content_id,
+                        self._announcing_session_id,
+                        self._announcing_content_id,
+                    )
                     self._clear_announcing()
                     return
                 self._clear_announcing()
@@ -220,6 +262,7 @@ class Player:
         with self._lock:
             self._announcing = True
             self._announcing_content_id = url
+            self._announcing_session_id = None  # filled in by _capture_session_id
             if 0 <= self.index < len(self.queue):
                 self._interrupted_at_seconds = time.monotonic() - self._track_started_at
             else:
@@ -230,7 +273,6 @@ class Player:
                 device.controller.play_media_url(
                     url, content_type=content_type, stream_type="BUFFERED"
                 )
-                self._announcing_session_id = _media_session_id(device)
             except DeviceUnavailable:
                 self._clear_announcing()
                 raise
@@ -255,8 +297,7 @@ class Player:
             current_time=current_time,
         )
         self._track_started_at = time.monotonic() - (current_time or 0)
-        self._current_content_id = stream.video_url
-        self._current_session_id = _media_session_id(device)
+        self._current_content_id = stream.video_url  # session id captured by _capture_session_id
 
     def _play_next_locked(self):
         self.index += 1

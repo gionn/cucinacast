@@ -1,18 +1,15 @@
 # CucinaCast
 
-## What this is
+Telegram bot that searches YouTube and casts the result to a Nest Mini
+(Chromecast) on the LAN. It also speaks gTTS announcements on demand and, when
+an ONVIF camera is configured, plays a sound effect on classified motion.
 
-CucinaCast: a Telegram bot that searches YouTube and casts the result to a Nest Mini
-(Chromecast) speaker on the local network.
+`README.md` is the user-facing doc (setup, commands, env vars): update it when a
+change affects how people run or use the bot. This file holds internal notes.
 
-When a change adds or changes a user-facing feature (a bot command, an env var
-affecting behavior, etc.), update `README.md` to match — it's the user-facing
-doc, kept separate from this file's internal architecture notes.
-
-When working in a new worktree for this repo, create the venv and install
-`requirements-dev.txt` right away (see Commands below) so `pytest` is ready
-before committing — the pre-commit hook runs the test suite, and a missing
-venv fails it.
+In a new worktree, create the venv and install `requirements-dev.txt` before
+committing: the pre-commit hook runs the whole suite whenever a `.py` file is
+staged, and a missing venv fails the commit.
 
 ## Commands
 
@@ -20,238 +17,105 @@ venv fails it.
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements-dev.txt
 
-# run the bot (reads .env via python-dotenv)
-./.venv/bin/python bot.py
-
-# standalone TTS test (writes an MP3, no camera/chromecast needed — useful to
-# isolate whether a problem is in synthesis or in casting/playback)
-./.venv/bin/python tts.py "some announcement text"
-
-# syntax-check after edits
-./.venv/bin/python -m py_compile bot.py castyt.py motion.py announce.py tts.py phrases.py storage.py sounds.py
-
-# run the test suite (unit tests for search ranking/caching and play-history
-# storage logic; everything else is still verified manually, see below)
-./.venv/bin/python -m pytest
-
-# install/refresh as a systemd service (creates .venv, installs deps every run)
-./setup.sh
+./.venv/bin/python bot.py               # reads .env via python-dotenv
+./.venv/bin/python -m pytest            # unit suite, no speaker/network needed
+pre-commit run --all-files              # lint, format and pytest; same as CI
+./.venv/bin/python tts.py "some text"   # standalone TTS, writes an MP3, no speaker
+sudo ./setup.sh                         # venv, deps, .env scaffold, systemd unit
 ```
 
-`requirements-dev.txt` pulls in `requirements.txt` plus `pytest`; `setup.sh` and the
-systemd service only need `requirements.txt`.
+`ruff` lives only in pre-commit's environment, so `ruff check`/`ruff format` are
+not on `PATH`; the hooks auto-fix, and whatever they rewrite has to be re-staged.
+`requirements-dev.txt` is `requirements.txt` plus pytest; the devcontainer
+installs pre-commit on top, and `setup.sh`/the systemd service install only
+`requirements.txt`.
 
-Required env vars (see README.md): `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID`. Optional:
-`NEST_DEVICE_NAME`, `ALLOWED_USER_IDS`, `ONVIF_USER`, `ONVIF_PASS`, `ONVIF_HOST`,
-`ONVIF_PORT`, `MOTION_DEBOUNCE_SECONDS`, `ANNOUNCE_PORT`, `ANNOUNCE_HOST`, `TTS_LANG`,
-`LOG_LEVEL`, `HTTPX_LOG_LEVEL`.
+Only `TELEGRAM_BOT_TOKEN` and `OWNER_USER_ID` are required; everything else is
+optional and documented in README. With `NEST_DEVICE_NAME` unset, `_get_device`
+discovers the first Chromecast by friendly name (`_discover_cast`) instead of
+requiring a configured default device.
 
-`pytest` covers the search-ranking/caching logic in `castyt.py` and the storage
-logic in `storage.py` (`tests/`), with the actual `yt-dlp`/sqlite calls
-mocked/isolated. Everything that touches the real Chromecast, camera, or Telegram
-API still has no automated coverage — verify those manually by running the bot
-against the real Nest Mini and confirming audio actually plays.
+## Tests
+
+`tests/` has mocked unit tests covering `castyt`, `storage`, `bot`, `motion`,
+`announce`, `tts`, `phrases` and `sounds`; no hardware or network is involved.
+`tests/conftest.py` repoints `storage.DB_PATH` at a per-test temp directory and
+sets fake Telegram env vars, so tests never touch the real `cucinacast.db`.
+
+Nothing drives the real speaker, camera or Telegram API automatically. Check
+casting and motion changes by running `bot.py` against the Nest Mini. Stop the
+service first when you also trigger `/announce`, since both write
+`tts.DEFAULT_PATH`.
 
 ## Architecture
 
-- `castyt.py` — all casting/search logic, no Telegram dependency.
-  - `search_youtube(query, count, exclude_ids)` fetches a pool of at least
-    `max(count, SEARCH_POOL_SIZE) + len(exclude_ids)` results via `yt-dlp`'s
-    `ytsearchN:` pseudo-URL (no API key; `_fetch_live`) — the `exclude_ids` term
-    guarantees at least `count` survivors even in the worst case where every
-    excluded id happens to fall inside the fetched pool. It drops any id in
-    `exclude_ids`, ranks the rest by `view_count` descending, keeps the top
-    `count`, and shuffles just that slice — so playback favors popular tracks
-    without always playing them in the same order. The raw pool is cached in
-    `storage.py` per query (`storage.cached_pool`/`store_pool`); a repeat search
-    serves from cache only if it's fresh and, after excluding ids, still leaves
-    at least `count` candidates — otherwise it falls back to a live fetch (sized
-    to account for the current `exclude_ids`) and re-caches the result.
-  - `Player` is a singleton (`player = Player()`) that holds one persistent
-    `catt.api.CattDevice` connection and a search-result queue. It registers itself as
-    a `pychromecast` media status listener (`new_media_status`) to detect when a track
-    finishes (`player_state == "IDLE"` and `idle_reason == "FINISHED"`) and
-    auto-advances to the next queued result. That status arrives for whatever
-    session is on the device, so the FINISHED handler only advances when the bot has
-    an active queue (`query` set, queue non-empty) *and* the finished session is the
-    one it started (matched by media session id, or content id as a fallback); media
-    the user started directly is left alone, and `_grow_queue_locked` refuses to run
-    without a query. When the queue runs out it re-searches the same query for more
-    results (`_grow_queue_locked`), excluding both video ids already in the queue and
-    ids from `storage.recent_ids` (recently played for that query), so playback
-    continues indefinitely until `/stop` without repeating recent picks. Unplayable
-    entries (private/removed videos) are skipped automatically (`_try_play_locked`),
-    which also records a successful play via `storage.record_play` — announcement
-    resumes (in `new_media_status`) don't call `_try_play_locked`, so they aren't
-    recorded as a new play. A discovery failure is not a per-track failure:
-    `_get_device` raises `DeviceUnavailable` and the play attempt aborts instead of
-    skipping through the queue.
-  - All device/queue mutation goes through `self._lock` since the pychromecast status
-    callback fires on its own socket thread, concurrently with bot-triggered calls.
-  - Casting a URL requires building a `catt.stream_info.StreamInfo` with
-    `cast_info=device._cast.cast_info` so format selection knows the Nest Mini is
-    audio-only — without it, `yt-dlp` picks a video format the device can't play.
-    Similarly, `content_type` must be passed through explicitly
-    (`stream.guessed_content_type`); catt's `play_media_url` defaults to `video/mp4`
-    which breaks audio-only/live streams.
-  - Live YouTube streams resolve to an HLS manifest whose content type isn't always
-    detected — this is a known limitation, not something to "fix" reactively.
-  - Device discovery (`_get_device`) retries a few times since local mDNS discovery is
-    occasionally flaky. After the retries it raises `DeviceUnavailable`, so callers can
-    tell a missing speaker apart from a track that won't play.
-  - Each device connection gets a persistent zeroconf instance injected onto its
-    socket client (`Player._live_zconf`, created once and never closed). catt
-    hands every Chromecast the discovery browser's shared zeroconf and then
-    stops it, so without this pychromecast's background reconnect thread would
-    resolve services against a dead loop and spin on
-    `AssertionError: Zeroconf instance loop must be running` forever.
-- `bot.py` — python-telegram-bot wiring only; delegates all real work to
-  `castyt.player`. Handlers (`play`, `announce`, `stop`) call into `Player` via
-  `asyncio.to_thread(...)` — this is required, not just a style choice: pychromecast's
-  discovery does blocking zeroconf I/O, which conflicts with running inside
-  python-telegram-bot's asyncio event loop if called directly on that thread.
-  - `/play` and `/announce` both need a text argument that Telegram has no way to
-    require up front — tapping either from the command menu always fires the bare
-    command with no args. Each command handler falls back to a two-step prompt: if
-    called with no args, it records the user id in a pending-state set
-    (`_awaiting_play_text`/`_awaiting_announce_text`) and asks for the missing text;
-    the next plain-text message from that user is consumed by `_route_text` (the
-    catch-all `MessageHandler`), which checks the pending sets before falling back to
-    its default of treating the text as a `/play` query — this keeps "just send a
-    plain text message to search" working unchanged for anyone who never invoked
-    `/announce`/bare `/play` in the first place.
-  - Access control: `OWNER_USER_ID` (required) is always implicitly allowed and gets
-    notified of unauthorized attempts; `ALLOWED_USER_IDS` (optional, comma-separated)
-    additionally allow-lists other users. If `ALLOWED_USER_IDS` is empty, the bot is
-    open to everyone.
-  - `post_init` starts `motion.run_forever(_on_motion)` as a background task via
-    plain `asyncio.create_task`, not `app.create_task` — `post_init` runs before
-    `Application.start()`, when `app.create_task` would warn and not track the
-    task for `stop()` to await. The task is kept in a module-level `_motion_task`
-    and cancelled/awaited from a `post_stop` hook instead, only if
-    `motion.motion_detection_enabled()` is true — bots without a camera
-    configured are unaffected. `_on_motion` skips unclassified
-    ("unknown"-category) motion entirely — generic motion is usually uninteresting
-    (wind, shadows, etc.), so only motion the camera actually classified (person/
-    animal/vehicle) triggers an alert. It also skips alerting during quiet hours
-    (`phrases.in_quiet_hours()`) — this check only gates the automatic motion path,
-    not the manual `/announce` command. Otherwise it plays the category's bundled
-    sound effect via `announce.serve_sound` + `player.announce` (both via
-    `asyncio.to_thread`, same pattern as `play`/`stop`). The alert is audio-only:
-    a sound effect per category, no speech and no Telegram clip.
-- `motion.py` — ONVIF motion-detection logic, no Telegram/TTS/casting dependency
-  (mirrors `castyt.py`'s separation).
-  - `watch_motion(on_motion)` subscribes to the camera's pullpoint events (same
-    `create_pullpoint_manager`/`PullMessages` flow as the retired PoC).
-    `discover_camera()` runs via `asyncio.to_thread` since it's blocking
-    WS-Discovery I/O, same reason as `castyt.py`'s Chromecast discovery.
-  - Classification for an object often arrives a few seconds after its motion
-    event (and occasionally just before). A confirmed motion event starts
-    `_evaluate_motion` (tracked in `pending_tasks`, both to avoid premature GC
-    and to gate overlapping evaluations to one at a time), which awaits a
-    per-event future resolved by the classification message, up to
-    `MOTION_CLASSIFICATION_TIMEOUT_SECONDS` (default 10) — so a classification
-    that lands late still counts, unlike a fixed-delay snapshot. The future is
-    seeded with a just-seen classification (within the same timeout) to cover
-    the before case. `last_object_class`/`last_object_class_at` hold only the
-    most recent value for that seeding; a classification that resolves an
-    in-flight event is cleared so it can't seed a later alarm, and the pending
-    future, not `pending_tasks`, is what gates a classification to its own event.
-  - The debounce cooldown (`MOTION_DEBOUNCE_SECONDS`, default 30) only starts once
-    a recognized category is resolved, not the moment raw motion fires — otherwise
-    an unclassified event (wind, shadows) would suppress a real one for 30s.
-  - `run_forever` wraps `watch_motion` in a retry loop so a transient camera or
-    network failure can't crash the bot process.
-  - `watch_motion`'s `finally` cancels and awaits any still-pending
-    `_evaluate_motion` task before shutting down the subscription — those
-    tasks are independent children of the loop, not of `watch_motion`, so
-    without this an in-flight one could still fire an announcement after a
-    subscription failure or shutdown has already moved on to a new watcher.
-  - `motion_detection_enabled()` gates the whole feature on `ONVIF_USER`/
-    `ONVIF_PASS` being set — both are optional at the bot level.
+- `castyt.py` — search and casting, no Telegram dependency.
+  - `search_youtube` fetches `max(count, SEARCH_POOL_SIZE=20) + len(exclude_ids)`
+    results through yt-dlp's `ytsearchN:` pseudo-URL (no API key), caches the raw
+    pool per query, drops excluded ids, ranks the rest by `view_count`, keeps
+    `count` and shuffles only that slice. A cached pool is reused only while it
+    still yields `count` candidates after exclusions; otherwise it is re-fetched
+    and replaces the cache. Callers pass recently played ids
+    (`storage.recent_ids`) plus ids already queued as `exclude_ids`.
+  - `player` is a module-level singleton holding one `CattDevice` and the queue.
+    Every device or queue mutation takes `self._lock`, because `new_media_status`
+    runs on pychromecast's socket thread.
+  - `new_media_status` advances only on `IDLE` + `FINISHED`, and only for a
+    session the bot started: the media session id is authoritative, the content
+    id a fallback. Media the user started on the speaker is never taken over, and
+    `_grow_queue_locked` re-searches the current query (refusing to run without
+    one) when the queue empties.
+  - Session ids are captured from a later status update that shows our content as
+    current, not right after `play_media_url`: catt's `block_until_active` can
+    return on the previous session, and a stale id never matches our own FINISHED.
+  - Announce-resume state lives on `Player` (`_announcing`, `_interrupted_at_seconds`)
+    and is cleared by `stop()` and by a fresh play. The position is approximate:
+    wall-clock elapsed time, captured before speaking, passed back as
+    `current_time`. The resume re-resolves the stream, so the content id changes.
+    If the resume fails, it falls back to `_try_play_locked` instead of stopping.
+  - `StreamInfo` must be built with `cast_info=device._cast.cast_info` and played
+    with `content_type=stream.guessed_content_type`; otherwise yt-dlp/catt choose
+    a video/mp4 format the audio-only device cannot play. Live YouTube streams
+    resolve to HLS whose content type is often undetected; known limitation.
+  - `_get_device` retries discovery and raises `DeviceUnavailable`, which aborts
+    the attempt instead of skipping through the queue; a `CastError` skips only
+    that entry. Each connection gets a persistent zeroconf instance injected into
+    its socket client: catt stops the discovery browser's shared one, and without
+    the replacement pychromecast's reconnect thread spins on
+    `AssertionError: Zeroconf instance loop must be running`.
+- `bot.py` — Telegram wiring only. Handler bodies call into `player`,
+  `synthesize_and_serve` and `serve_sound` through `asyncio.to_thread`, because
+  catt/zeroconf discovery blocks and would stall the event loop.
+  - Bare `/play` and `/announce` fall back to a two-step prompt: the user id goes
+    into `_awaiting_play_text`/`_awaiting_announce_text`, and `_route_text` (the
+    catch-all text handler) consumes the next message before defaulting to `/play`.
+  - Access: `OWNER_USER_ID` is always allowed and is DMed about denied attempts;
+    an empty `ALLOWED_USER_IDS` opens the bot to everyone.
+  - `post_init` starts `motion.run_forever` with plain `asyncio.create_task` (it
+    runs before `Application.start()`, where `app.create_task` is not tracked) and
+    `post_stop` cancels it, both only when motion detection is enabled.
+- `motion.py` — ONVIF pullpoint events, no Telegram/TTS/casting dependency.
+  - Motion and object classification arrive as separate events, in either order.
+    A motion event creates a future that `_evaluate_motion` waits on for
+    `MOTION_CLASSIFICATION_TIMEOUT_SECONDS` (default 10), seeded with a
+    classification seen just before the alarm, so late and early classifications
+    both count. `pending_tasks` allows one evaluation at a time.
+  - Debounce starts only once a category resolves, so unclassified motion (wind,
+    shadows) cannot suppress a real alert. `run_forever` retries after 30s, and
+    `watch_motion`'s `finally` cancels pending evaluations and tears down the
+    subscription.
   - `describe_object` returns a language-neutral category
-    ("person"/"animal"/"vehicle"/"unknown"), not wording — `sounds.py` maps it to
-    a bundled sound effect and `phrases.py` handles quiet-hour gating, keeping
-    `motion.py` free of any TTS/language/audio concern.
-- `phrases.py` — announcement settings: `TTS_LANG` (env, default `en`) selects the
-  language used by `/announce`'s gTTS speech; `in_quiet_hours(now=None)` checks the
-  current local hour against `QUIET_HOURS_START`/`QUIET_HOURS_END` (default `22`/`8`),
-  handling the overnight wraparound; `bot.py`'s `_on_motion` uses it to suppress
-  motion-triggered sound effects at night. Kept separate from `bot.py` (wiring only)
-  and from the language-agnostic `motion.py`/`tts.py`/`sounds.py`.
-- `sounds.py` — maps a `motion.describe_object` category
-  ("person"/"animal"/"vehicle") to a bundled sound-effect file under `assets/`,
-  returning `None` for categories with no sound (`sound_path`). The assets are
-  short mp3s (placeholders generated with `ffmpeg`; interchangeable as long as the
-  filenames stay). Kept separate from `announce.py` so serving stays free of asset
-  knowledge, and language-neutral like `motion.py`.
-- `tts.py` — TTS synthesis only (via `gTTS`, chosen since the project already
-  requires internet for YouTube), no serving/casting dependency. `synthesize(text,
-  lang, path)` saves an MP3 and returns its path. Kept separate from `announce.py`
-  so other features can reuse synthesis without the HTTP-serving concern, and so
-  it can be exercised standalone (`python tts.py "some text"`) to check whether a
-  problem is in the TTS output itself vs. in casting/playback.
-- `announce.py` — serves announcement audio over a small stdlib
-  `ThreadingHTTPServer` on the LAN, since the Chromecast can only play HTTP(S)
-  URLs, not local file paths. `synthesize_and_serve` writes `tts.synthesize`'s MP3;
-  `serve_sound` copies a bundled `sounds.py` asset. Both overwrite the same shared
-  file and return its LAN URL.
-  - The audio file is a single fixed path (`tts.DEFAULT_PATH`), overwritten per
-    announcement — no per-announcement filenames or cleanup, since motion events
-    are already debounced and only one announcement is ever in flight. The
-    user-triggered `/announce` command isn't debounced, so back-to-back
-    announcements (or one racing a motion event) can overwrite the file before
-    the Nest Mini finishes fetching the prior one — accepted as a known
-    limitation rather than adding per-announcement filenames/a queue.
-  - `_AnnounceHandler` only serves that one fixed path (404s everything else) —
-    deliberately not `SimpleHTTPRequestHandler` over the whole temp directory,
-    which would expose unrelated temp files on a shared machine.
-  - `_get_lan_ip()` detects the host's outbound LAN IP (not `localhost`, which the
-    Chromecast can't resolve) via a connect-less UDP socket trick; override with
-    `ANNOUNCE_HOST` for multi-NIC machines or networks without external
-    connectivity (where the detection trick itself would fail).
-- `storage.py` — sqlite persistence (`cucinacast.db`, gitignored) for both
-  play history and the search-result cache, no Telegram/casting dependency.
-  - Schema creation and legacy-table cleanup live in `init_db()`, called once
-    at startup by `bot.main()` — `_connect()` stays free of DDL, since DDL
-    takes a heavier lock than normal reads/writes. `init_db()` also drops the
-    `devices` table left by the removed Bluetooth-presence feature, and purges
-    any `query IS NULL` rows. Query lookups use `IS ?` so a `None` query compares
-    correctly instead of silently matching nothing.
-  - `plays` table backs `record_play`/`recent_ids`: each query keeps only its
-    `HISTORY_LIMIT` most recent plays (older rows for that query are deleted on
-    each `record_play`), so recency-based exclusion needs no unbounded memory or
-    disk growth.
-  - `search_cache` table backs `cached_pool`/`store_pool`: `cached_pool` returns
-    `None` (a cache miss) if the query has fewer rows than the caller's requested
-    `min_count`, or if the cached rows are older than `CACHE_TTL_SECONDS` — either
-    triggers a live re-fetch in `castyt.py`, which then calls `store_pool` to
-    fully replace that query's cached rows.
-  - Each function opens and closes its own short-lived `sqlite3.connect`; no
-    long-held connection or extra locking, since `Player` already serializes its
-    own calls into this module through `self._lock`.
-- `Player.announce(url)` in `castyt.py` interrupts current playback to play an
-  arbitrary announcement URL, tracked via an `_announcing` flag on `Player`. The
-  `new_media_status` FINISHED callback branches on this flag: after an
-  announcement it resumes the current queue entry near where it was interrupted;
-  otherwise it advances the queue as before. It only counts a finish as the
-  announcement's when it is the session the bot started (matched by media session id,
-  or content id as a fallback), so a user replacing the announcement with their own
-  media drops the resume instead of taking over. `stop()` and a fresh `/play` also
-  clear `_announcing`, so they can't leave a stale flag.
-  - Resume position is approximated, not exact: `_play_current_locked` records
-    `_track_started_at = time.monotonic() - (current_time or 0)` whenever it
-    (re)starts a track. `announce()` captures
-    `_interrupted_at_seconds = time.monotonic() - _track_started_at` *before*
-    playing the announcement (not after — the announcement's own duration
-    would otherwise inflate the resumed position by however long it took to
-    speak), and that saved value is passed as `current_time` to
-    `play_media_url` (a native `catt`/pychromecast parameter) on resume. This
-    drifts by a few seconds (network/buffering delay isn't accounted for) —
-    accepted, since exact position would require reading the device's own
-    playback clock.
-  - The resume itself goes through the same failure handling as normal queue
-    advancement: if `_play_current_locked` raises, `new_media_status` falls
-    back to `_try_play_locked` (resetting the cast device on `CastError` and
-    advancing the index first) instead of leaving playback stopped on a
-    transient cast failure.
+    ("person"/"animal"/"vehicle"/"unknown"), never wording.
+- `announce.py` — a Chromecast can only fetch HTTP(S), so audio is served by a
+  stdlib `ThreadingHTTPServer` on `ANNOUNCE_PORT` (default 8765). One fixed file
+  (`tts.DEFAULT_PATH`) is overwritten per announcement and the handler 404s
+  everything else; back-to-back announcements can race, which is accepted.
+  `ANNOUNCE_HOST` overrides LAN IP detection for multi-NIC hosts.
+- `tts.py`, `sounds.py`, `phrases.py` — synthesis, category→asset lookup, and
+  TTS language plus quiet-hour gating. Each stays separate so `motion.py` stays
+  language-neutral and serving stays free of asset knowledge.
+- `storage.py` — sqlite (`cucinacast.db`, gitignored). `plays` keeps the last 20
+  plays per query for recency exclusion; `search_cache` holds the raw pool with a
+  7-day TTL. Schema and legacy cleanup live in `init_db()`, called once from
+  `bot.main()`, so `_connect()` stays free of DDL. Query lookups use `IS ?` so a
+  `NULL` query compares correctly.

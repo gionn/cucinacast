@@ -121,7 +121,16 @@ class _FakeStreamInfo:
         self.stream_type = "BUFFERED"
 
 
-_FINISHED_STATUS = SimpleNamespace(player_state="IDLE", idle_reason="FINISHED", content_id=None)
+def _media_status(content_id=None, session_id=None, state="PLAYING", idle_reason=None):
+    return SimpleNamespace(
+        player_state=state,
+        idle_reason=idle_reason,
+        content_id=content_id,
+        media_session_id=session_id,
+    )
+
+
+_FINISHED_STATUS = _media_status(state="IDLE", idle_reason="FINISHED")
 
 
 def test_new_media_status_ignores_non_finished_status():
@@ -212,6 +221,63 @@ def test_new_media_status_advances_on_session_id_match():
     player._play_next_locked.assert_called_once()
 
 
+def test_captures_track_session_id_from_device_status():
+    # The session id read right after play_media_url can be a stale one (catt's
+    # block_until_active returns on the previous session), so it is taken from the
+    # status once our own content is current instead.
+    player = castyt.Player()
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._current_content_id = "u"
+    player._play_next_locked = Mock()
+
+    player.new_media_status(_media_status(content_id="u", session_id=7))
+
+    assert player._current_session_id == 7
+
+    player.new_media_status(
+        _media_status(content_id="u", session_id=7, state="IDLE", idle_reason="FINISHED")
+    )
+
+    player._play_next_locked.assert_called_once()
+
+
+def test_does_not_capture_session_id_for_other_content():
+    player = castyt.Player()
+    player._current_content_id = "u"
+
+    player.new_media_status(_media_status(content_id="other", session_id=7))
+
+    assert player._current_session_id is None
+
+
+def test_captures_announcement_session_id_from_device_status():
+    # Regression: the id read straight after play_media_url was the previous
+    # announcement's, so the announcement's own FINISHED was rejected as someone
+    # else's and the resume was dropped.
+    announcement_url = "http://host/announce.mp3"
+    player = castyt.Player()
+    player._announcing = True
+    player._announcing_content_id = announcement_url
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    player.new_media_status(_media_status(content_id=announcement_url, session_id=9))
+
+    assert player._announcing_session_id == 9
+
+    player.new_media_status(
+        _media_status(
+            content_id=announcement_url, session_id=9, state="IDLE", idle_reason="FINISHED"
+        )
+    )
+
+    player._play_current_locked.assert_called_once_with(current_time=12.3)
+
+
 def test_new_media_status_ignores_foreign_media_when_queue_active():
     # Even with an active queue, a finished session that isn't the track we
     # loaded (e.g. the user's news) must not be treated as ours to advance.
@@ -273,6 +339,37 @@ def test_new_media_status_ignores_when_session_ids_differ_even_if_content_matche
 
     player._play_current_locked.assert_not_called()
     player._try_play_locked.assert_not_called()
+
+
+def test_ignores_terminal_status_of_replaced_announcement_when_capturing_session():
+    # Announcing a second time resets the captured id while the first
+    # announcement's terminal status is still in flight. Claiming that stale id
+    # makes the new announcement's FINISHED fail the match and drops the resume.
+    announcement_url = "http://host/announce.mp3"
+    player = castyt.Player()
+    player._announcing = True
+    player._announcing_content_id = announcement_url
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    player.new_media_status(
+        _media_status(
+            content_id=announcement_url, session_id=1, state="IDLE", idle_reason="CANCELLED"
+        )
+    )
+    player.new_media_status(_media_status(content_id=announcement_url, session_id=2))
+
+    assert player._announcing_session_id == 2
+
+    player.new_media_status(
+        _media_status(
+            content_id=announcement_url, session_id=2, state="IDLE", idle_reason="FINISHED"
+        )
+    )
+
+    player._play_current_locked.assert_called_once_with(current_time=12.3)
 
 
 def test_new_media_status_resumes_after_announcement(monkeypatch):
@@ -482,7 +579,7 @@ def test_try_play_locked_skips_entry_on_cast_error(monkeypatch):
 
     assert entry["id"] == "b"
     assert player.index == 1
-    devices[0]._cast.disconnect.assert_called_once_with(blocking=False)
+    devices[0]._cast.disconnect.assert_called_once_with(timeout=0)
 
 
 def test_try_play_locked_skips_entry_on_generic_error_without_reset(monkeypatch):
@@ -601,7 +698,9 @@ def test_play_current_locked_records_content_id(monkeypatch):
     assert player._current_session_id is None
 
 
-def test_play_current_locked_records_session_id(monkeypatch):
+def test_play_current_locked_leaves_session_id_for_the_status_callback(monkeypatch):
+    # The session id read straight after play_media_url can be the previous
+    # session's, so _play_current_locked leaves it to _capture_session_id.
     device = _FakeDevice()
     device._cast.media_controller.status.media_session_id = 7
     monkeypatch.setattr(castyt, "_get_device", lambda: device)
@@ -613,7 +712,7 @@ def test_play_current_locked_records_session_id(monkeypatch):
 
     player._play_current_locked()
 
-    assert player._current_session_id == 7
+    assert player._current_session_id is None
 
 
 def test_play_current_locked_clears_ownership_ids_on_failure(monkeypatch):
@@ -662,7 +761,43 @@ def test_stop_resets_player_state(monkeypatch):
     fake_device.stop.assert_called_once()
 
 
+def test_get_device_uses_the_configured_name(monkeypatch):
+    monkeypatch.setenv("NEST_DEVICE_NAME", "Cucinino")
+    monkeypatch.setattr(castyt, "CattDevice", Mock(return_value=Mock()))
+
+    castyt._get_device()
+
+    castyt.CattDevice.assert_called_once_with("Cucinino")
+
+
+def test_get_device_discovers_a_cast_when_no_name_is_set(monkeypatch):
+    monkeypatch.delenv("NEST_DEVICE_NAME", raising=False)
+    monkeypatch.setattr(
+        castyt,
+        "get_cast_infos",
+        lambda: [
+            SimpleNamespace(friendly_name="Cucinino", host="192.168.1.50"),
+            SimpleNamespace(friendly_name="Salotto", host="192.168.1.60"),
+        ],
+    )
+    monkeypatch.setattr(castyt, "CattDevice", Mock(return_value=Mock()))
+
+    castyt._get_device()
+
+    castyt.CattDevice.assert_called_once_with(ip_addr="192.168.1.50")
+
+
+def test_get_device_raises_device_unavailable_when_no_cast_is_found(monkeypatch):
+    monkeypatch.delenv("NEST_DEVICE_NAME", raising=False)
+    monkeypatch.setattr(castyt, "DISCOVERY_RETRIES", 1)
+    monkeypatch.setattr(castyt, "get_cast_infos", lambda: [])
+
+    with pytest.raises(castyt.DeviceUnavailable):
+        castyt._get_device()
+
+
 def test_get_device_raises_device_unavailable(monkeypatch):
+    monkeypatch.setenv("NEST_DEVICE_NAME", "Cucinino")
     monkeypatch.setattr(castyt, "DISCOVERY_RETRIES", 2)
     monkeypatch.setattr(castyt.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(castyt, "CattDevice", Mock(side_effect=CastError("nope")))
