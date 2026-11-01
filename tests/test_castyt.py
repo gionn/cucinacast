@@ -373,15 +373,20 @@ def test_ignores_terminal_status_of_replaced_announcement_when_capturing_session
     player._play_current_locked.assert_called_once_with(current_time=12.3)
 
 
-def test_media_status_listener_does_not_block_on_playback_lock(monkeypatch):
-    # play_search/announce hold _lock while blocked on socket responses, and the
-    # listener runs on that same socket thread, so handling a status inline would
-    # stall the load it is waiting for.
+def _player_with_device(monkeypatch):
     fake_device = _FakeDevice()
     monkeypatch.setattr(castyt, "_get_device", lambda: fake_device)
     player = castyt.Player()
     player._ensure_device()
     listener = fake_device._cast.media_controller.register_status_listener.call_args.args[0]
+    return player, listener
+
+
+def test_media_status_listener_does_not_block_on_playback_lock(monkeypatch):
+    # play_search/announce hold _lock while blocked on socket responses, and the
+    # listener runs on that same socket thread, so handling a status inline would
+    # stall the load it is waiting for.
+    player, listener = _player_with_device(monkeypatch)
     player._current_content_id = "u"
 
     player._lock.acquire()
@@ -440,11 +445,7 @@ def test_status_dispatcher_snapshots_status_before_handling(monkeypatch):
     # pychromecast rewrites one MediaStatus in place and fires listeners with it,
     # so a queued reference would change under the worker while it waits for the
     # lock, losing the status it was queued for.
-    fake_device = _FakeDevice()
-    monkeypatch.setattr(castyt, "_get_device", lambda: fake_device)
-    player = castyt.Player()
-    player._ensure_device()
-    listener = fake_device._cast.media_controller.register_status_listener.call_args.args[0]
+    player, listener = _player_with_device(monkeypatch)
     player._current_content_id = "u"
 
     status = _media_status(content_id="u", session_id=7)

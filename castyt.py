@@ -99,7 +99,8 @@ class _StatusDispatcher:
     The handler takes `Player._lock`, and play_search/skip/announce hold that lock
     while blocked on responses only the socket thread can deliver, so handling a
     status inline would stall the load it is waiting for. A single worker keeps
-    statuses in arrival order.
+    statuses in arrival order, each copied out because pychromecast rewrites one
+    `MediaStatus` object in place.
     """
 
     def __init__(self, player):
@@ -108,8 +109,6 @@ class _StatusDispatcher:
         self._worker = None
 
     def new_media_status(self, status):
-        # pychromecast rewrites one MediaStatus in place, so a queued reference
-        # would change while the worker waits for the lock.
         if self._worker is None:
             self._worker = threading.Thread(target=self._run, name="cast-media-status", daemon=True)
             self._worker.start()
@@ -237,15 +236,15 @@ class Player:
             # own FINISHED fail the match.
             return
         with self._lock:
-            if (
-                self._announcing
-                and self._announcing_session_id is None
-                and content_id == self._announcing_content_id
-                and session_id != self._replaced_announcement_session_id
-            ):
-                self._announcing_session_id = session_id
-                logger.info("Announcement running as session %s", session_id)
-            elif self._current_session_id is None and content_id == self._current_content_id:
+            if self._announcing and self._announcing_session_id is None:
+                if (
+                    content_id == self._announcing_content_id
+                    and session_id != self._replaced_announcement_session_id
+                ):
+                    self._announcing_session_id = session_id
+                    logger.info("Announcement running as session %s", session_id)
+                    return
+            if self._current_session_id is None and content_id == self._current_content_id:
                 self._current_session_id = session_id
                 logger.info("Track running as session %s", session_id)
 
