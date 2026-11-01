@@ -6,6 +6,7 @@ import queue
 import random
 import threading
 import time
+from collections import namedtuple
 
 import zeroconf
 from catt.api import CattDevice
@@ -78,6 +79,19 @@ def _reported_session_id(device):
     return session_id if isinstance(session_id, int) else None
 
 
+# The fields `Player` reads from a status, copied out of pychromecast's mutable one.
+_MediaStatus = namedtuple("_MediaStatus", "player_state idle_reason content_id media_session_id")
+
+
+def _snapshot_status(status):
+    return _MediaStatus(
+        getattr(status, "player_state", None),
+        getattr(status, "idle_reason", None),
+        getattr(status, "content_id", None),
+        getattr(status, "media_session_id", None),
+    )
+
+
 class _StatusDispatcher:
     """Runs media-status handling on a worker instead of pychromecast's socket
     thread.
@@ -94,10 +108,12 @@ class _StatusDispatcher:
         self._worker = None
 
     def new_media_status(self, status):
+        # pychromecast rewrites one MediaStatus in place, so a queued reference
+        # would change while the worker waits for the lock.
         if self._worker is None:
             self._worker = threading.Thread(target=self._run, name="cast-media-status", daemon=True)
             self._worker.start()
-        self._pending.put((status, None))
+        self._pending.put((_snapshot_status(status), None))
 
     def drain(self, timeout=5.0):
         """Return once every status queued so far has been handled."""
@@ -241,6 +257,17 @@ class Player:
             finished_content_id = getattr(status, "content_id", None)
             finished_session_id = getattr(status, "media_session_id", None)
             if self._announcing:
+                if (
+                    self._replaced_announcement_session_id is not None
+                    and finished_session_id == self._replaced_announcement_session_id
+                ):
+                    # The replaced announcement finishing after the replacement
+                    # loaded; its URL is the same, so only the id separates them.
+                    logger.info(
+                        "Ignoring finished replaced announcement session %s",
+                        finished_session_id,
+                    )
+                    return
                 if not _is_our_session(
                     finished_content_id,
                     finished_session_id,

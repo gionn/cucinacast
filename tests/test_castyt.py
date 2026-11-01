@@ -436,6 +436,56 @@ def test_replacing_announcement_ignores_delayed_status_from_replaced_session(mon
     player._play_current_locked.assert_called_once()
 
 
+def test_status_dispatcher_snapshots_status_before_handling(monkeypatch):
+    # pychromecast rewrites one MediaStatus in place and fires listeners with it,
+    # so a queued reference would change under the worker while it waits for the
+    # lock, losing the status it was queued for.
+    fake_device = _FakeDevice()
+    monkeypatch.setattr(castyt, "_get_device", lambda: fake_device)
+    player = castyt.Player()
+    player._ensure_device()
+    listener = fake_device._cast.media_controller.register_status_listener.call_args.args[0]
+    player._current_content_id = "u"
+
+    status = _media_status(content_id="u", session_id=7)
+    player._lock.acquire()
+    try:
+        listener.new_media_status(status)
+        status.content_id = "other"  # the device's next update, same object
+    finally:
+        player._lock.release()
+
+    player._status_dispatcher.drain()
+    assert player._current_session_id == 7
+
+
+@pytest.mark.parametrize("captured_session_id", [None, 2])
+def test_finished_status_of_replaced_announcement_is_ignored(captured_session_id):
+    # The replaced session's terminal status can arrive after the replacement has
+    # loaded. Both serve the same URL, so only the session id separates them:
+    # treating it as ours would resume music over the new announcement.
+    announcement_url = "http://host/announce.mp3"
+    player = castyt.Player()
+    player._announcing = True
+    player._announcing_content_id = announcement_url
+    player._announcing_session_id = captured_session_id
+    player._replaced_announcement_session_id = 1
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    player.new_media_status(
+        _media_status(
+            content_id=announcement_url, session_id=1, state="IDLE", idle_reason="FINISHED"
+        )
+    )
+
+    player._play_current_locked.assert_not_called()
+    assert player._announcing is True
+    assert player._announcing_session_id == captured_session_id
+
+
 def test_new_media_status_resumes_after_announcement(monkeypatch):
     player = castyt.Player()
     player._announcing = True
