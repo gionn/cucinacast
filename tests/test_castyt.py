@@ -436,17 +436,17 @@ def test_resume_after_announcement_is_logged(caplog):
 
 
 def test_idle_status_while_announcing_is_logged(caplog):
-    # A cut-short announcement never reaches the resume, so its idle reason is the
-    # only clue.
+    # An idle status with no terminal meaning is otherwise invisible, and it is the
+    # only clue when an announcement ends early.
     player = castyt.Player()
     player._announcing_content_id = "http://host/announce.mp3?t=first"
 
     with caplog.at_level(logging.INFO, logger="castyt"):
         player.new_media_status(
-            _media_status(content_id="http://host/x.mp3", state="IDLE", idle_reason="ERROR")
+            _media_status(content_id="http://host/x.mp3", state="IDLE", idle_reason="INTERRUPTED")
         )
 
-    assert "Idle (ERROR) while announcing" in caplog.text
+    assert "Idle (INTERRUPTED) while announcing" in caplog.text
 
 
 def test_announce_logs_the_track_it_interrupts(monkeypatch, caplog):
@@ -459,6 +459,42 @@ def test_announce_logs_the_track_it_interrupts(monkeypatch, caplog):
         player.announce("http://host/announce.mp3?t=first")
 
     assert "Announcing over 'Da Funk'" in caplog.text
+
+
+def test_failed_announcement_resumes_the_track():
+    # A media the device gives up on never sends FINISHED, so the queue would stay
+    # interrupted forever.
+    player = castyt.Player()
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    player.new_media_status(
+        _media_status(
+            content_id="http://host/announce.mp3?t=first", state="IDLE", idle_reason="ERROR"
+        )
+    )
+
+    player._play_current_locked.assert_called_once_with(current_time=12.3)
+    assert player._announcing_content_id is None
+
+
+def test_failed_media_of_other_content_does_not_resume():
+    # The ERROR may belong to media we never loaded, so it is not ours to end.
+    player = castyt.Player()
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._play_current_locked = Mock()
+
+    player.new_media_status(
+        _media_status(content_id="http://news.example/other", state="IDLE", idle_reason="ERROR")
+    )
+
+    player._play_current_locked.assert_not_called()
+    assert player._announcing_content_id == "http://host/announce.mp3?t=first"
 
 
 def test_ensure_device_injects_live_zeroconf(monkeypatch):

@@ -194,11 +194,45 @@ class Player:
                 logger.exception("Error disconnecting stale Chromecast device")
             self._device = None
 
+    def _end_announcement_locked(self):
+        """The announcement is over, however it ended; bring the queue back."""
+        self._clear_announcing()
+        if not 0 <= self.index < len(self.queue):
+            return
+        title = self.queue[self.index].get("title")
+        try:
+            self._play_current_locked(current_time=self._interrupted_at_seconds)
+            logger.info("Resumed %r at %.1fs", title, self._interrupted_at_seconds or 0)
+            return
+        except DeviceUnavailable:
+            logger.warning("Speaker unavailable; not resuming %r after announcement", title)
+            return
+        except CastError:
+            logger.exception("Failed to resume %r after announcement", title)
+            self._reset_cast_device_locked()
+            self.index += 1
+        except Exception:
+            logger.exception("Failed to resume %r after announcement", title)
+            self.index += 1
+        try:
+            self._try_play_locked()
+        except DeviceUnavailable:
+            logger.warning("Speaker unavailable; not resuming queue")
+
     def new_media_status(self, status):
-        if status.player_state != "IDLE" or status.idle_reason != "FINISHED":
-            if status.player_state == "IDLE" and self._announcing_content_id is not None:
-                # An announcement that is cut short never reaches the resume, and
-                # nothing else records why.
+        if status.player_state != "IDLE":
+            return
+        if status.idle_reason == "ERROR":
+            # A media the device gave up on never reaches FINISHED, which would
+            # leave an announcement in flight and the queue interrupted.
+            with self._lock:
+                if status.content_id != self._announcing_content_id:
+                    return
+                logger.warning("Announcement failed to play; resuming")
+                self._end_announcement_locked()
+            return
+        if status.idle_reason != "FINISHED":
+            if self._announcing_content_id is not None:
                 logger.info(
                     "Idle (%s) while announcing, content %r",
                     status.idle_reason,
@@ -217,33 +251,7 @@ class Player:
                         self._announcing_content_id,
                     )
                     return
-                self._clear_announcing()
-                if 0 <= self.index < len(self.queue):
-                    title = self.queue[self.index].get("title")
-                    try:
-                        self._play_current_locked(current_time=self._interrupted_at_seconds)
-                        logger.info(
-                            "Resumed %r at %.1fs",
-                            title,
-                            self._interrupted_at_seconds or 0,
-                        )
-                        return
-                    except DeviceUnavailable:
-                        logger.warning(
-                            "Speaker unavailable; not resuming %r after announcement", title
-                        )
-                        return
-                    except CastError:
-                        logger.exception("Failed to resume %r after announcement", title)
-                        self._reset_cast_device_locked()
-                        self.index += 1
-                    except Exception:
-                        logger.exception("Failed to resume %r after announcement", title)
-                        self.index += 1
-                    try:
-                        self._try_play_locked()
-                    except DeviceUnavailable:
-                        logger.warning("Speaker unavailable; not resuming queue")
+                self._end_announcement_locked()
                 return
             if self.query is None or not self.queue:
                 # new_media_status sees every session on the device, not just
