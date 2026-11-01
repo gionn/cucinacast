@@ -58,8 +58,10 @@ service first when you also trigger `/announce`, since both write
     and replaces the cache. Callers pass recently played ids
     (`storage.recent_ids`) plus ids already queued as `exclude_ids`.
   - `player` is a module-level singleton holding one `CattDevice` and the queue.
-    Every device or queue mutation takes `self._lock`, because `new_media_status`
-    runs on pychromecast's socket thread.
+    Every device or queue mutation takes `self._lock`. Status handling therefore
+    runs on `_StatusDispatcher`'s worker rather than pychromecast's socket thread:
+    inline handling would block that thread while `play_search`/`skip`/`announce`
+    wait on its responses while holding the lock.
   - `new_media_status` advances only on `IDLE` + `FINISHED`, and only for a
     session the bot started: the media session id is authoritative, the content
     id a fallback. Media the user started on the speaker is never taken over, and
@@ -68,6 +70,8 @@ service first when you also trigger `/announce`, since both write
   - Session ids are captured from a later status update that shows our content as
     current, not right after `play_media_url`: catt's `block_until_active` can
     return on the previous session, and a stale id never matches our own FINISHED.
+    A replacement announcement reuses the served URL, so the replaced session's id
+    is excluded too; content id cannot tell the two apart.
   - Announce-resume state lives on `Player` (`_announcing`, `_interrupted_at_seconds`)
     and is cleared by `stop()` and by a fresh play. The position is approximate:
     wall-clock elapsed time, captured before speaking, passed back as

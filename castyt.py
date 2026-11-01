@@ -2,6 +2,7 @@
 
 import logging
 import os
+import queue
 import random
 import threading
 import time
@@ -69,6 +70,56 @@ def _is_our_session(finished_content_id, finished_session_id, content_id, sessio
     return content_id is not None and finished_content_id == content_id
 
 
+def _reported_session_id(device):
+    """The session the connection last saw, read from the media controller rather
+    than our own state so it is available even while our listener is catching up."""
+    media = getattr(getattr(device, "_cast", None), "media_controller", None)
+    session_id = getattr(getattr(media, "status", None), "media_session_id", None)
+    return session_id if isinstance(session_id, int) else None
+
+
+class _StatusDispatcher:
+    """Runs media-status handling on a worker instead of pychromecast's socket
+    thread.
+
+    The handler takes `Player._lock`, and play_search/skip/announce hold that lock
+    while blocked on responses only the socket thread can deliver, so handling a
+    status inline would stall the load it is waiting for. A single worker keeps
+    statuses in arrival order.
+    """
+
+    def __init__(self, player):
+        self._player = player
+        self._pending = queue.Queue()
+        self._worker = None
+
+    def new_media_status(self, status):
+        if self._worker is None:
+            self._worker = threading.Thread(target=self._run, name="cast-media-status", daemon=True)
+            self._worker.start()
+        self._pending.put((status, None))
+
+    def drain(self, timeout=5.0):
+        """Return once every status queued so far has been handled."""
+        if self._worker is None:
+            return
+        handled = threading.Event()
+        self._pending.put((None, handled))
+        if not handled.wait(timeout):
+            raise TimeoutError("media status worker did not catch up")
+
+    def _run(self):
+        while True:
+            status, handled = self._pending.get()
+            if handled is not None:
+                handled.set()
+                continue
+            try:
+                self._player.new_media_status(status)
+            except Exception:
+                logger.exception("Error handling media status")
+
+
 def _fetch_live(query, fetch_count):
     opts = {"quiet": True, "extract_flat": True}
     with YoutubeDL(opts) as ydl:
@@ -109,12 +160,14 @@ class Player:
         self._device = None
         self._zconf = None
         self._lock = threading.Lock()
+        self._status_dispatcher = _StatusDispatcher(self)
         self.query = None
         self.queue = []
         self.index = -1
         self._announcing = False
         self._announcing_content_id = None
         self._announcing_session_id = None
+        self._replaced_announcement_session_id = None
         self._track_started_at = 0
         self._interrupted_at_seconds = None
         self._current_content_id = None
@@ -124,6 +177,7 @@ class Player:
         self._announcing = False
         self._announcing_content_id = None
         self._announcing_session_id = None
+        self._replaced_announcement_session_id = None
 
     def _live_zconf(self):
         """Return a persistent zeroconf instance, created once and never
@@ -138,7 +192,7 @@ class Player:
         if self._device is None:
             self._device = _get_device()
             self._device._cast.socket_client.zconf = self._live_zconf()
-            self._device._cast.media_controller.register_status_listener(self)
+            self._device._cast.media_controller.register_status_listener(self._status_dispatcher)
         return self._device
 
     def _reset_cast_device_locked(self):
@@ -171,6 +225,7 @@ class Player:
                 self._announcing
                 and self._announcing_session_id is None
                 and content_id == self._announcing_content_id
+                and session_id != self._replaced_announcement_session_id
             ):
                 self._announcing_session_id = session_id
                 logger.info("Announcement running as session %s", session_id)
@@ -260,6 +315,7 @@ class Player:
         time, not the device's actual playback position, so it can drift by a
         few seconds)."""
         with self._lock:
+            replacing = self._announcing
             self._announcing = True
             self._announcing_content_id = url
             self._announcing_session_id = None  # filled in by _capture_session_id
@@ -269,6 +325,11 @@ class Player:
                 self._interrupted_at_seconds = None
             try:
                 device = self._ensure_device()
+                if replacing:
+                    # A replacement announcement is served from the same URL as the
+                    # one it replaces, so a status still in flight from the old
+                    # session would otherwise be taken for this one's.
+                    self._replaced_announcement_session_id = _reported_session_id(device)
                 device.controller.prep_app()
                 device.controller.play_media_url(
                     url, content_type=content_type, stream_type="BUFFERED"

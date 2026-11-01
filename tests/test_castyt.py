@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -372,6 +373,69 @@ def test_ignores_terminal_status_of_replaced_announcement_when_capturing_session
     player._play_current_locked.assert_called_once_with(current_time=12.3)
 
 
+def test_media_status_listener_does_not_block_on_playback_lock(monkeypatch):
+    # play_search/announce hold _lock while blocked on socket responses, and the
+    # listener runs on that same socket thread, so handling a status inline would
+    # stall the load it is waiting for.
+    fake_device = _FakeDevice()
+    monkeypatch.setattr(castyt, "_get_device", lambda: fake_device)
+    player = castyt.Player()
+    player._ensure_device()
+    listener = fake_device._cast.media_controller.register_status_listener.call_args.args[0]
+    player._current_content_id = "u"
+
+    player._lock.acquire()
+    try:
+        caller = threading.Thread(
+            target=listener.new_media_status,
+            args=(_media_status(content_id="u", session_id=7),),
+            daemon=True,
+        )
+        caller.start()
+        caller.join(1.0)
+        assert not caller.is_alive(), "status handling blocked on the playback lock"
+        assert player._current_session_id is None
+    finally:
+        player._lock.release()
+
+    player._status_dispatcher.drain()
+    assert player._current_session_id == 7
+
+
+def test_replacing_announcement_ignores_delayed_status_from_replaced_session(monkeypatch):
+    # Both announcements serve the same URL, so a PLAYING status still in flight
+    # from the replaced one can only be told apart by its session id.
+    announcement_url = "http://host/announce.mp3"
+    fake_device = _FakeDevice()
+    fake_device._cast.media_controller.status = _media_status(
+        content_id=announcement_url, session_id=1
+    )
+    monkeypatch.setattr(castyt, "_get_device", lambda: fake_device)
+    player = castyt.Player()
+    player._announcing = True
+    player._announcing_content_id = announcement_url
+    player._announcing_session_id = 1
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._play_current_locked = Mock()
+
+    player.announce(announcement_url)
+
+    player.new_media_status(_media_status(content_id=announcement_url, session_id=1))
+    assert player._announcing_session_id is None
+
+    player.new_media_status(_media_status(content_id=announcement_url, session_id=2))
+    assert player._announcing_session_id == 2
+
+    player.new_media_status(
+        _media_status(
+            content_id=announcement_url, session_id=2, state="IDLE", idle_reason="FINISHED"
+        )
+    )
+
+    player._play_current_locked.assert_called_once()
+
+
 def test_new_media_status_resumes_after_announcement(monkeypatch):
     player = castyt.Player()
     player._announcing = True
@@ -475,7 +539,9 @@ def test_ensure_device_injects_live_zeroconf(monkeypatch):
 
     assert player._device is fake_device
     assert fake_device._cast.socket_client.zconf is sentinel_zconf
-    fake_device._cast.media_controller.register_status_listener.assert_called_once_with(player)
+    fake_device._cast.media_controller.register_status_listener.assert_called_once_with(
+        player._status_dispatcher
+    )
 
 
 def test_ensure_device_reuses_zeroconf_after_reset(monkeypatch):
