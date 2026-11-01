@@ -63,22 +63,18 @@ service first when you also trigger `/announce`, since both write
     inline handling would block that thread while `play_search`/`skip`/`announce`
     wait on its responses while holding the lock. The worker gets a snapshot of
     each status, since pychromecast rewrites one `MediaStatus` object in place.
-  - `new_media_status` advances only on `IDLE` + `FINISHED`, and only for a
-    session the bot started: the media session id is authoritative, the content
-    id a fallback. Media the user started on the speaker is never taken over, and
-    `_grow_queue_locked` re-searches the current query (refusing to run without
-    one) when the queue empties.
-  - Session ids are captured from a later status update that shows our content as
-    current, not right after `play_media_url`: catt's `block_until_active` can
-    return on the previous session, and a stale id never matches our own FINISHED.
-    A replacement announcement reuses the served URL, so the replaced session's id
-    is excluded too, both when capturing an id and when a `FINISHED` arrives;
-    content id cannot tell the two apart.
-  - Announce-resume state lives on `Player` (`_announcing`, `_interrupted_at_seconds`)
-    and is cleared by `stop()` and by a fresh play. The position is approximate:
-    wall-clock elapsed time, captured before speaking, passed back as
-    `current_time`. The resume re-resolves the stream, so the content id changes.
-    If the resume fails, it falls back to `_try_play_locked` instead of stopping.
+  - `new_media_status` advances only on `IDLE` + `FINISHED`, and only when the
+    content id is the one we loaded: the track's URL, or the announcement URL,
+    which `announce.py` gives a fresh token per call so a replaced announcement
+    cannot be mistaken for the current one. Media the user started on the speaker
+    is never taken over, and `_grow_queue_locked` re-searches the current query
+    (refusing to run without one) when the queue empties.
+  - Announce-resume state lives on `Player` (`_announcing_content_id`,
+    `_interrupted_at_seconds`) and is cleared by `stop()` and by a fresh play. The
+    position is approximate: wall-clock elapsed time, captured before speaking,
+    passed back as `current_time`. The resume re-resolves the stream, so the
+    content id changes. If the resume fails, it falls back to `_try_play_locked`
+    instead of stopping.
   - `StreamInfo` must be built with `cast_info=device._cast.cast_info` and played
     with `content_type=stream.guessed_content_type`; otherwise yt-dlp/catt choose
     a video/mp4 format the audio-only device cannot play. Live YouTube streams

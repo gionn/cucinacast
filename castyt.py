@@ -61,26 +61,8 @@ def _get_device():
     raise DeviceUnavailable(f"{target} could not be found on the network") from last_error
 
 
-def _is_our_session(finished_content_id, finished_session_id, content_id, session_id):
-    """Whether a FINISHED status can be proven to belong to a session we started.
-    A reported session id is authoritative; the content id is only a fallback when
-    one side has no session id. Announcements reuse one URL, so a conflicting
-    session id must not be overridden by a matching content id."""
-    if session_id is not None and finished_session_id is not None:
-        return finished_session_id == session_id
-    return content_id is not None and finished_content_id == content_id
-
-
-def _reported_session_id(device):
-    """The session the connection last saw, read from the media controller rather
-    than our own state so it is available even while our listener is catching up."""
-    media = getattr(getattr(device, "_cast", None), "media_controller", None)
-    session_id = getattr(getattr(media, "status", None), "media_session_id", None)
-    return session_id if isinstance(session_id, int) else None
-
-
 # The fields `Player` reads from a status, copied out of pychromecast's mutable one.
-_MediaStatus = namedtuple("_MediaStatus", "player_state idle_reason content_id media_session_id")
+_MediaStatus = namedtuple("_MediaStatus", "player_state idle_reason content_id")
 
 
 def _snapshot_status(status):
@@ -88,7 +70,6 @@ def _snapshot_status(status):
         getattr(status, "player_state", None),
         getattr(status, "idle_reason", None),
         getattr(status, "content_id", None),
-        getattr(status, "media_session_id", None),
     )
 
 
@@ -179,20 +160,13 @@ class Player:
         self.query = None
         self.queue = []
         self.index = -1
-        self._announcing = False
         self._announcing_content_id = None
-        self._announcing_session_id = None
-        self._replaced_announcement_session_id = None
         self._track_started_at = 0
         self._interrupted_at_seconds = None
         self._current_content_id = None
-        self._current_session_id = None
 
     def _clear_announcing(self):
-        self._announcing = False
         self._announcing_content_id = None
-        self._announcing_session_id = None
-        self._replaced_announcement_session_id = None
 
     def _live_zconf(self):
         """Return a persistent zeroconf instance, created once and never
@@ -220,70 +194,20 @@ class Player:
                 logger.exception("Error disconnecting stale Chromecast device")
             self._device = None
 
-    def _capture_session_id(self, status):
-        """Record the session id of the media we just loaded, once the device
-        reports it as current. catt's `block_until_active` only waits for *any*
-        active session, which can still be the previous one, so reading the id
-        straight after `play_media_url` can pick up a stale value and make our
-        own media's FINISHED look like someone else's."""
-        content_id = getattr(status, "content_id", None)
-        session_id = getattr(status, "media_session_id", None)
-        if content_id is None or not isinstance(session_id, int):
-            return
-        if getattr(status, "player_state", None) == "IDLE":
-            # A terminal status belongs to the session that just ended, which may
-            # be an announcement this one replaced; claiming its id would make our
-            # own FINISHED fail the match.
-            return
-        with self._lock:
-            if self._announcing and self._announcing_session_id is None:
-                if (
-                    content_id == self._announcing_content_id
-                    and session_id != self._replaced_announcement_session_id
-                ):
-                    self._announcing_session_id = session_id
-                    logger.info("Announcement running as session %s", session_id)
-                    return
-            if self._current_session_id is None and content_id == self._current_content_id:
-                self._current_session_id = session_id
-                logger.info("Track running as session %s", session_id)
-
     def new_media_status(self, status):
         if status.player_state != "IDLE" or status.idle_reason != "FINISHED":
-            self._capture_session_id(status)
             return
         with self._lock:
             finished_content_id = getattr(status, "content_id", None)
-            finished_session_id = getattr(status, "media_session_id", None)
-            if self._announcing:
-                if (
-                    self._replaced_announcement_session_id is not None
-                    and finished_session_id == self._replaced_announcement_session_id
-                ):
-                    # The replaced announcement finishing after the replacement
-                    # loaded; its URL is the same, so only the id separates them.
+            if self._announcing_content_id is not None:
+                if finished_content_id != self._announcing_content_id:
+                    # Either an announcement we replaced or the user's own media.
+                    # Neither may resume the queue.
                     logger.info(
-                        "Ignoring finished replaced announcement session %s",
-                        finished_session_id,
-                    )
-                    return
-                if not _is_our_session(
-                    finished_content_id,
-                    finished_session_id,
-                    self._announcing_content_id,
-                    self._announcing_session_id,
-                ):
-                    # Can't prove this finish is our announcement, so the user replaced
-                    # it; drop the resume rather than firing it over their media.
-                    logger.info(
-                        "Finished session %s (content %r) is not our announcement "
-                        "session %s (content %r); dropping resume",
-                        finished_session_id,
+                        "Ignoring finished content %r while announcing %r",
                         finished_content_id,
-                        self._announcing_session_id,
                         self._announcing_content_id,
                     )
-                    self._clear_announcing()
                     return
                 self._clear_announcing()
                 if 0 <= self.index < len(self.queue):
@@ -319,15 +243,12 @@ class Player:
                 # ours, so a FINISHED can belong to media the user started.
                 logger.info("No active playback queue; ignoring finished media")
                 return
-            if not _is_our_session(
-                finished_content_id,
-                finished_session_id,
-                self._current_content_id,
-                self._current_session_id,
-            ):
-                # Can't prove the finished session is the one we started, so it isn't
-                # ours to advance.
-                logger.info("Finished session is not the track we are playing; ignoring")
+            if finished_content_id != self._current_content_id:
+                # The finished media isn't the one we loaded, so it isn't ours to
+                # advance.
+                logger.info(
+                    "Finished content %r is not the track we are playing", finished_content_id
+                )
                 return
             try:
                 self._play_next_locked()
@@ -341,21 +262,13 @@ class Player:
         time, not the device's actual playback position, so it can drift by a
         few seconds)."""
         with self._lock:
-            replacing = self._announcing
-            self._announcing = True
             self._announcing_content_id = url
-            self._announcing_session_id = None  # filled in by _capture_session_id
             if 0 <= self.index < len(self.queue):
                 self._interrupted_at_seconds = time.monotonic() - self._track_started_at
             else:
                 self._interrupted_at_seconds = None
             try:
                 device = self._ensure_device()
-                if replacing:
-                    # A replacement announcement is served from the same URL as the
-                    # one it replaces, so a status still in flight from the old
-                    # session would otherwise be taken for this one's.
-                    self._replaced_announcement_session_id = _reported_session_id(device)
                 device.controller.prep_app()
                 device.controller.play_media_url(
                     url, content_type=content_type, stream_type="BUFFERED"
@@ -369,9 +282,8 @@ class Player:
 
     def _play_current_locked(self, current_time=None):
         entry = self.queue[self.index]
-        # A failed attempt must not leave the previous track's ids looking like ours.
+        # A failed attempt must not leave the previous track's id looking like ours.
         self._current_content_id = None
-        self._current_session_id = None
         device = self._ensure_device()
         stream = StreamInfo(entry["url"], cast_info=device._cast.cast_info)
         device.controller.prep_app()
@@ -384,7 +296,7 @@ class Player:
             current_time=current_time,
         )
         self._track_started_at = time.monotonic() - (current_time or 0)
-        self._current_content_id = stream.video_url  # session id captured by _capture_session_id
+        self._current_content_id = stream.video_url
 
     def _play_next_locked(self):
         self.index += 1

@@ -26,6 +26,17 @@ def test_do_get_wrong_path_returns_404():
     handler.send_response.assert_not_called()
 
 
+def test_do_get_ignores_query_string(monkeypatch):
+    # Each announcement fetches the file with its own token in the URL.
+    handler = _make_handler()
+    handler.path = f"{announce._URL_PATH}?t=abc123"
+    monkeypatch.setattr(announce, "DEFAULT_PATH", _FakePath(lambda: b"mp3-bytes"))
+
+    handler.do_GET()
+
+    handler.send_response.assert_called_once_with(200)
+
+
 class _FakePath:
     def __init__(self, read_bytes):
         self._read_bytes = read_bytes
@@ -97,7 +108,9 @@ def test_announce_port_respects_env(monkeypatch):
     assert announce._announce_port() == 9999
 
 
-def test_serve_sound_copies_file_and_returns_url(monkeypatch, tmp_path):
+def test_serve_sound_returns_a_new_url_each_time(monkeypatch, tmp_path):
+    # The Chromecast reports the URL as the media's content id, so the token is
+    # what tells one announcement apart from the next.
     source = tmp_path / "person.mp3"
     source.write_bytes(b"sound-bytes")
     served = tmp_path / "served.mp3"
@@ -106,7 +119,24 @@ def test_serve_sound_copies_file_and_returns_url(monkeypatch, tmp_path):
     monkeypatch.setattr(announce, "_server_port", 8765)
     monkeypatch.setattr(announce, "_get_lan_ip", lambda: "192.168.1.20")
 
-    url = announce.serve_sound(source)
+    first = announce.serve_sound(source)
+    second = announce.serve_sound(source)
 
     assert served.read_bytes() == b"sound-bytes"
-    assert url == "http://192.168.1.20:8765/served.mp3"
+    assert first.startswith("http://192.168.1.20:8765/served.mp3?t=")
+    assert first != second
+
+
+def test_synthesize_and_serve_returns_a_new_url_each_time(monkeypatch, tmp_path):
+    served = tmp_path / "served.mp3"
+    monkeypatch.setattr(announce, "DEFAULT_PATH", served)
+    monkeypatch.setattr(announce, "synthesize", Mock())
+    monkeypatch.setattr(announce, "_ensure_server", Mock())
+    monkeypatch.setattr(announce, "_server_port", 8765)
+    monkeypatch.setattr(announce, "_get_lan_ip", lambda: "192.168.1.20")
+
+    first = announce.synthesize_and_serve("hello")
+    second = announce.synthesize_and_serve("hello")
+
+    assert first.startswith("http://192.168.1.20:8765/served.mp3?t=")
+    assert first != second

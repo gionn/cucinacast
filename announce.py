@@ -6,6 +6,7 @@ import os
 import shutil
 import socket
 import threading
+from uuid import uuid4
 
 from tts import DEFAULT_PATH, synthesize
 
@@ -26,7 +27,7 @@ class _AnnounceHandler(http.server.BaseHTTPRequestHandler):
     """Serves only the single announcement file — never the whole temp directory."""
 
     def do_GET(self):
-        if self.path != _URL_PATH:
+        if self.path.partition("?")[0] != _URL_PATH:
             self.send_error(404)
             return
         try:
@@ -73,17 +74,23 @@ def _ensure_server():
         logger.info("Announcement HTTP server listening on port %s", port)
 
 
-def synthesize_and_serve(text, lang="en"):
-    """Synthesize text to speech, overwrite the shared audio file, ensure the HTTP
-    server is running, and return a LAN-reachable URL for the Chromecast to fetch."""
-    synthesize(text, lang=lang, path=DEFAULT_PATH)
+def _announcement_url():
+    """A LAN-reachable URL for the Chromecast, distinct for every call: the device
+    reports it as the media's content id, which is how one announcement is told
+    apart from the one it replaced."""
     _ensure_server()
-    return f"http://{_get_lan_ip()}:{_server_port}/{DEFAULT_PATH.name}"
+    return f"http://{_get_lan_ip()}:{_server_port}/{DEFAULT_PATH.name}?t={uuid4().hex}"
+
+
+def synthesize_and_serve(text, lang="en"):
+    """Synthesize text to speech, overwrite the shared audio file and return a URL
+    for the Chromecast to fetch."""
+    synthesize(text, lang=lang, path=DEFAULT_PATH)
+    return _announcement_url()
 
 
 def serve_sound(path):
-    """Copy a bundled sound effect over the shared audio file, ensure the HTTP
-    server is running, and return a LAN-reachable URL for the Chromecast to fetch."""
+    """Copy a bundled sound effect over the shared audio file and return a URL for
+    the Chromecast to fetch."""
     shutil.copyfile(path, DEFAULT_PATH)
-    _ensure_server()
-    return f"http://{_get_lan_ip()}:{_server_port}/{DEFAULT_PATH.name}"
+    return _announcement_url()
