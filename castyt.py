@@ -196,6 +196,14 @@ class Player:
 
     def new_media_status(self, status):
         if status.player_state != "IDLE" or status.idle_reason != "FINISHED":
+            if status.player_state == "IDLE" and self._announcing_content_id is not None:
+                # An announcement that is cut short never reaches the resume, and
+                # nothing else records why.
+                logger.info(
+                    "Idle (%s) while announcing, content %r",
+                    status.idle_reason,
+                    status.content_id,
+                )
             return
         with self._lock:
             finished_content_id = getattr(status, "content_id", None)
@@ -211,27 +219,26 @@ class Player:
                     return
                 self._clear_announcing()
                 if 0 <= self.index < len(self.queue):
+                    title = self.queue[self.index].get("title")
                     try:
                         self._play_current_locked(current_time=self._interrupted_at_seconds)
+                        logger.info(
+                            "Resumed %r at %.1fs",
+                            title,
+                            self._interrupted_at_seconds or 0,
+                        )
                         return
                     except DeviceUnavailable:
                         logger.warning(
-                            "Speaker unavailable; not resuming %r after announcement",
-                            self.queue[self.index].get("title"),
+                            "Speaker unavailable; not resuming %r after announcement", title
                         )
                         return
                     except CastError:
-                        logger.exception(
-                            "Failed to resume %r after announcement",
-                            self.queue[self.index].get("title"),
-                        )
+                        logger.exception("Failed to resume %r after announcement", title)
                         self._reset_cast_device_locked()
                         self.index += 1
                     except Exception:
-                        logger.exception(
-                            "Failed to resume %r after announcement",
-                            self.queue[self.index].get("title"),
-                        )
+                        logger.exception("Failed to resume %r after announcement", title)
                         self.index += 1
                     try:
                         self._try_play_locked()
@@ -263,10 +270,11 @@ class Player:
         few seconds)."""
         with self._lock:
             self._announcing_content_id = url
-            if 0 <= self.index < len(self.queue):
-                self._interrupted_at_seconds = time.monotonic() - self._track_started_at
-            else:
-                self._interrupted_at_seconds = None
+            playing = self.queue[self.index] if 0 <= self.index < len(self.queue) else None
+            self._interrupted_at_seconds = (
+                time.monotonic() - self._track_started_at if playing else None
+            )
+            logger.info("Announcing over %r", playing.get("title") if playing else None)
             try:
                 device = self._ensure_device()
                 device.controller.prep_app()
@@ -315,6 +323,7 @@ class Player:
             try:
                 self._play_current_locked()
                 storage.record_play(self.query, entry["id"])
+                logger.info("Playing %r", entry.get("title"))
                 return entry
             except DeviceUnavailable:
                 # An unreachable speaker isn't a bad track; don't skip through

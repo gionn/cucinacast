@@ -1,3 +1,4 @@
+import logging
 import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -400,6 +401,64 @@ def test_new_media_status_falls_back_without_reset_on_generic_error_resuming():
     player._reset_cast_device_locked.assert_not_called()
     assert player.index == 1
     player._try_play_locked.assert_called_once()
+
+
+def test_playing_a_track_is_logged(monkeypatch, caplog):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+    monkeypatch.setattr(castyt, "StreamInfo", _FakeStreamInfo)
+    player = castyt.Player()
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "Da Funk", "url": "u"}]
+    player.index = 0
+
+    with caplog.at_level(logging.INFO, logger="castyt"):
+        player._try_play_locked()
+
+    assert "Playing 'Da Funk'" in caplog.text
+
+
+def test_resume_after_announcement_is_logged(caplog):
+    player = castyt.Player()
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
+    player.queue = [{"id": "a", "title": "Da Funk", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    with caplog.at_level(logging.INFO, logger="castyt"):
+        player.new_media_status(
+            _media_status(
+                content_id="http://host/announce.mp3?t=first", state="IDLE", idle_reason="FINISHED"
+            )
+        )
+
+    assert "Resumed 'Da Funk' at 12.3s" in caplog.text
+
+
+def test_idle_status_while_announcing_is_logged(caplog):
+    # A cut-short announcement never reaches the resume, so its idle reason is the
+    # only clue.
+    player = castyt.Player()
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
+
+    with caplog.at_level(logging.INFO, logger="castyt"):
+        player.new_media_status(
+            _media_status(content_id="http://host/x.mp3", state="IDLE", idle_reason="ERROR")
+        )
+
+    assert "Idle (ERROR) while announcing" in caplog.text
+
+
+def test_announce_logs_the_track_it_interrupts(monkeypatch, caplog):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+    player = castyt.Player()
+    player.queue = [{"id": "a", "title": "Da Funk", "url": "u"}]
+    player.index = 0
+
+    with caplog.at_level(logging.INFO, logger="castyt"):
+        player.announce("http://host/announce.mp3?t=first")
+
+    assert "Announcing over 'Da Funk'" in caplog.text
 
 
 def test_ensure_device_injects_live_zeroconf(monkeypatch):
