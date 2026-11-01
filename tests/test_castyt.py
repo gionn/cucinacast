@@ -1,3 +1,5 @@
+import logging
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -121,7 +123,15 @@ class _FakeStreamInfo:
         self.stream_type = "BUFFERED"
 
 
-_FINISHED_STATUS = SimpleNamespace(player_state="IDLE", idle_reason="FINISHED", content_id=None)
+def _media_status(content_id=None, state="PLAYING", idle_reason=None):
+    return SimpleNamespace(
+        player_state=state,
+        idle_reason=idle_reason,
+        content_id=content_id,
+    )
+
+
+_FINISHED_STATUS = _media_status(state="IDLE", idle_reason="FINISHED")
 
 
 def test_new_media_status_ignores_non_finished_status():
@@ -162,7 +172,6 @@ def test_new_media_status_ignores_finished_without_active_queue():
 
 def test_new_media_status_advances_queue_when_not_announcing():
     player = castyt.Player()
-    player._announcing = False
     player.query = "daft punk"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
@@ -176,8 +185,8 @@ def test_new_media_status_advances_queue_when_not_announcing():
     player._play_next_locked.assert_called_once()
 
 
-def test_new_media_status_ignores_finished_without_any_ids():
-    # If the status proves no ownership, treat it as not ours.
+def test_new_media_status_ignores_finished_without_content_id():
+    # Without a content id there is no proof the finished media is ours.
     player = castyt.Player()
     player.query = "daft punk"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
@@ -185,31 +194,9 @@ def test_new_media_status_ignores_finished_without_any_ids():
     player._current_content_id = "u"
     player._play_next_locked = Mock()
 
-    player.new_media_status(_FINISHED_STATUS)  # content_id and session id both None
+    player.new_media_status(_FINISHED_STATUS)  # content_id is None
 
     player._play_next_locked.assert_not_called()
-
-
-def test_new_media_status_advances_on_session_id_match():
-    # The session id alone proves ownership when the content id is absent.
-    player = castyt.Player()
-    player.query = "daft punk"
-    player.queue = [{"id": "a", "title": "A", "url": "u"}]
-    player.index = 0
-    player._current_content_id = "u"
-    player._current_session_id = 42
-    player._play_next_locked = Mock()
-
-    player.new_media_status(
-        SimpleNamespace(
-            player_state="IDLE",
-            idle_reason="FINISHED",
-            content_id=None,
-            media_session_id=42,
-        )
-    )
-
-    player._play_next_locked.assert_called_once()
 
 
 def test_new_media_status_ignores_foreign_media_when_queue_active():
@@ -250,35 +237,70 @@ def test_new_media_status_advances_when_content_id_matches():
     player._play_next_locked.assert_called_once()
 
 
-def test_new_media_status_ignores_when_session_ids_differ_even_if_content_matches():
-    # Announcements reuse one URL, so a conflicting session id must win over a
-    # matching content id.
+def _player_with_device(monkeypatch):
+    fake_device = _FakeDevice()
+    monkeypatch.setattr(castyt, "_get_device", lambda: fake_device)
     player = castyt.Player()
-    player._announcing = True
-    player._announcing_content_id = "http://host/cucinacast_announce.mp3"
-    player._announcing_session_id = 5
+    player._ensure_device()
+    listener = fake_device._cast.media_controller.register_status_listener.call_args.args[0]
+    return player, listener
+
+
+def test_media_status_listener_does_not_block_on_playback_lock(monkeypatch):
+    # play_search/announce hold _lock while blocked on socket responses, and the
+    # listener runs on that same socket thread, so handling a status inline would
+    # stall the load it is waiting for.
+    player, listener = _player_with_device(monkeypatch)
+    player.query = "daft punk"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
-    player._play_current_locked = Mock()
-    player._try_play_locked = Mock()
+    player._current_content_id = "u"
+    player._play_next_locked = Mock()
 
-    player.new_media_status(
-        SimpleNamespace(
-            player_state="IDLE",
-            idle_reason="FINISHED",
-            content_id="http://host/cucinacast_announce.mp3",
-            media_session_id=9,
+    player._lock.acquire()
+    try:
+        caller = threading.Thread(
+            target=listener.new_media_status,
+            args=(_media_status(content_id="u", state="IDLE", idle_reason="FINISHED"),),
+            daemon=True,
         )
-    )
+        caller.start()
+        caller.join(1.0)
+        assert not caller.is_alive(), "status handling blocked on the playback lock"
+        player._play_next_locked.assert_not_called()
+    finally:
+        player._lock.release()
 
-    player._play_current_locked.assert_not_called()
-    player._try_play_locked.assert_not_called()
+    player._status_dispatcher.drain()
+    player._play_next_locked.assert_called_once()
 
 
-def test_new_media_status_resumes_after_announcement(monkeypatch):
+def test_status_dispatcher_snapshots_status_before_handling(monkeypatch):
+    # pychromecast rewrites one MediaStatus in place and fires listeners with it,
+    # so a queued reference would change under the worker while it waits for the
+    # lock, losing the status it was queued for.
+    player, listener = _player_with_device(monkeypatch)
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._current_content_id = "u"
+    player._play_next_locked = Mock()
+
+    status = _media_status(content_id="u", state="IDLE", idle_reason="FINISHED")
+    player._lock.acquire()
+    try:
+        listener.new_media_status(status)
+        status.content_id = "other"  # the device's next update, same object
+    finally:
+        player._lock.release()
+
+    player._status_dispatcher.drain()
+    player._play_next_locked.assert_called_once()
+
+
+def test_new_media_status_resumes_after_announcement():
     player = castyt.Player()
-    player._announcing = True
-    player._announcing_content_id = "http://host/announce.mp3"
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
     player._interrupted_at_seconds = 12.3
@@ -286,25 +308,43 @@ def test_new_media_status_resumes_after_announcement(monkeypatch):
     player._play_next_locked = Mock()
 
     player.new_media_status(
-        SimpleNamespace(
-            player_state="IDLE",
-            idle_reason="FINISHED",
-            content_id="http://host/announce.mp3",
+        _media_status(
+            content_id="http://host/announce.mp3?t=first", state="IDLE", idle_reason="FINISHED"
         )
     )
 
     player._play_current_locked.assert_called_once_with(current_time=12.3)
-    assert player._announcing is False
     assert player._announcing_content_id is None
     player._play_next_locked.assert_not_called()
 
 
-def test_new_media_status_drops_resume_when_announcement_replaced():
+def test_new_media_status_ignores_finish_of_replaced_announcement(monkeypatch):
+    # A replaced announcement's FINISHED can arrive after the replacement loaded.
+    # Its URL differs, so it must neither resume nor clear the new announcement.
+    player = castyt.Player()
+    player._announcing_content_id = "http://host/announce.mp3?t=second"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+    player._try_play_locked = Mock()
+
+    player.new_media_status(
+        _media_status(
+            content_id="http://host/announce.mp3?t=first", state="IDLE", idle_reason="FINISHED"
+        )
+    )
+
+    player._play_current_locked.assert_not_called()
+    player._try_play_locked.assert_not_called()
+    assert player._announcing_content_id == "http://host/announce.mp3?t=second"
+
+
+def test_new_media_status_ignores_finish_of_media_while_announcing():
     # The user replaced the announcement with their own media, so the interrupted
     # track must not resume over it.
     player = castyt.Player()
-    player._announcing = True
-    player._announcing_content_id = "http://host/announce.mp3"
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
     player._interrupted_at_seconds = 12.3
@@ -321,13 +361,10 @@ def test_new_media_status_drops_resume_when_announcement_replaced():
 
     player._play_current_locked.assert_not_called()
     player._try_play_locked.assert_not_called()
-    assert player._announcing is False
-    assert player._announcing_content_id is None
 
 
 def test_new_media_status_resets_device_on_cast_error_resuming():
     player = castyt.Player()
-    player._announcing = True
     player._announcing_content_id = "http://host/announce.mp3"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
@@ -348,7 +385,6 @@ def test_new_media_status_resets_device_on_cast_error_resuming():
 
 def test_new_media_status_falls_back_without_reset_on_generic_error_resuming():
     player = castyt.Player()
-    player._announcing = True
     player._announcing_content_id = "http://host/announce.mp3"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
@@ -367,6 +403,100 @@ def test_new_media_status_falls_back_without_reset_on_generic_error_resuming():
     player._try_play_locked.assert_called_once()
 
 
+def test_playing_a_track_is_logged(monkeypatch, caplog):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+    monkeypatch.setattr(castyt, "StreamInfo", _FakeStreamInfo)
+    player = castyt.Player()
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "Da Funk", "url": "u"}]
+    player.index = 0
+
+    with caplog.at_level(logging.INFO, logger="castyt"):
+        player._try_play_locked()
+
+    assert "Playing 'Da Funk'" in caplog.text
+
+
+def test_resume_after_announcement_is_logged(caplog):
+    player = castyt.Player()
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
+    player.queue = [{"id": "a", "title": "Da Funk", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    with caplog.at_level(logging.INFO, logger="castyt"):
+        player.new_media_status(
+            _media_status(
+                content_id="http://host/announce.mp3?t=first", state="IDLE", idle_reason="FINISHED"
+            )
+        )
+
+    assert "Resumed 'Da Funk' at 12.3s" in caplog.text
+
+
+def test_idle_status_while_announcing_is_logged(caplog):
+    # An idle status with no terminal meaning is otherwise invisible, and it is the
+    # only clue when an announcement ends early.
+    player = castyt.Player()
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
+
+    with caplog.at_level(logging.INFO, logger="castyt"):
+        player.new_media_status(
+            _media_status(content_id="http://host/x.mp3", state="IDLE", idle_reason="INTERRUPTED")
+        )
+
+    assert "Idle (INTERRUPTED) while announcing" in caplog.text
+
+
+def test_announce_logs_the_track_it_interrupts(monkeypatch, caplog):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+    player = castyt.Player()
+    player.queue = [{"id": "a", "title": "Da Funk", "url": "u"}]
+    player.index = 0
+
+    with caplog.at_level(logging.INFO, logger="castyt"):
+        player.announce("http://host/announce.mp3?t=first")
+
+    assert "Announcing over 'Da Funk'" in caplog.text
+
+
+def test_failed_announcement_resumes_the_track():
+    # A media the device gives up on never sends FINISHED, so the queue would stay
+    # interrupted forever.
+    player = castyt.Player()
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    player.new_media_status(
+        _media_status(
+            content_id="http://host/announce.mp3?t=first", state="IDLE", idle_reason="ERROR"
+        )
+    )
+
+    player._play_current_locked.assert_called_once_with(current_time=12.3)
+    assert player._announcing_content_id is None
+
+
+def test_failed_media_of_other_content_does_not_resume():
+    # The ERROR may belong to media we never loaded, so it is not ours to end.
+    player = castyt.Player()
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._play_current_locked = Mock()
+
+    player.new_media_status(
+        _media_status(content_id="http://news.example/other", state="IDLE", idle_reason="ERROR")
+    )
+
+    player._play_current_locked.assert_not_called()
+    assert player._announcing_content_id == "http://host/announce.mp3?t=first"
+
+
 def test_ensure_device_injects_live_zeroconf(monkeypatch):
     fake_device = _FakeDevice()
     sentinel_zconf = object()
@@ -378,7 +508,9 @@ def test_ensure_device_injects_live_zeroconf(monkeypatch):
 
     assert player._device is fake_device
     assert fake_device._cast.socket_client.zconf is sentinel_zconf
-    fake_device._cast.media_controller.register_status_listener.assert_called_once_with(player)
+    fake_device._cast.media_controller.register_status_listener.assert_called_once_with(
+        player._status_dispatcher
+    )
 
 
 def test_ensure_device_reuses_zeroconf_after_reset(monkeypatch):
@@ -416,7 +548,6 @@ def test_announce_captures_interrupted_position_and_plays_url(monkeypatch):
     player.announce("http://host/audio.mp3")
 
     assert player._interrupted_at_seconds == 5.0
-    assert player._announcing is True
     assert player._announcing_content_id == "http://host/audio.mp3"
     fake_device.controller.play_media_url.assert_called_once_with(
         "http://host/audio.mp3", content_type="audio/mpeg", stream_type="BUFFERED"
@@ -431,23 +562,18 @@ def test_announce_clears_announcing_flag_on_failure(monkeypatch):
 
     player.announce("http://host/audio.mp3")
 
-    assert player._announcing is False
     assert player._announcing_content_id is None
 
 
 def test_announce_clears_state_and_reraises_on_device_unavailable(monkeypatch):
     monkeypatch.setattr(castyt, "_get_device", Mock(side_effect=castyt.DeviceUnavailable("nope")))
     player = castyt.Player()
-    player._announcing = True
     player._announcing_content_id = "old"
-    player._announcing_session_id = 1
 
     with pytest.raises(castyt.DeviceUnavailable):
         player.announce("http://host/audio.mp3")
 
-    assert player._announcing is False
     assert player._announcing_content_id is None
-    assert player._announcing_session_id is None
 
 
 def test_try_play_locked_records_play_on_success(monkeypatch):
@@ -482,7 +608,7 @@ def test_try_play_locked_skips_entry_on_cast_error(monkeypatch):
 
     assert entry["id"] == "b"
     assert player.index == 1
-    devices[0]._cast.disconnect.assert_called_once_with(blocking=False)
+    devices[0]._cast.disconnect.assert_called_once_with(timeout=0)
 
 
 def test_try_play_locked_skips_entry_on_generic_error_without_reset(monkeypatch):
@@ -598,38 +724,20 @@ def test_play_current_locked_records_content_id(monkeypatch):
     player._play_current_locked()
 
     assert player._current_content_id == "u1"
-    assert player._current_session_id is None
 
 
-def test_play_current_locked_records_session_id(monkeypatch):
-    device = _FakeDevice()
-    device._cast.media_controller.status.media_session_id = 7
-    monkeypatch.setattr(castyt, "_get_device", lambda: device)
-    monkeypatch.setattr(castyt, "StreamInfo", _FakeStreamInfo)
-    player = castyt.Player()
-    player.query = "q"
-    player.queue = [{"id": "a", "title": "A", "url": "u1"}]
-    player.index = 0
-
-    player._play_current_locked()
-
-    assert player._current_session_id == 7
-
-
-def test_play_current_locked_clears_ownership_ids_on_failure(monkeypatch):
+def test_play_current_locked_clears_ownership_id_on_failure(monkeypatch):
     monkeypatch.setattr(castyt, "_get_device", Mock(side_effect=castyt.DeviceUnavailable("nope")))
     player = castyt.Player()
     player.query = "q"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
     player._current_content_id = "stale"
-    player._current_session_id = 5
 
     with pytest.raises(castyt.DeviceUnavailable):
         player._play_current_locked()
 
     assert player._current_content_id is None
-    assert player._current_session_id is None
 
 
 def test_play_search_raises_when_nothing_playable(monkeypatch):
@@ -648,7 +756,7 @@ def test_stop_resets_player_state(monkeypatch):
     monkeypatch.setattr(castyt, "_get_device", lambda: fake_device)
 
     player = castyt.Player()
-    player._announcing = True
+    player._announcing_content_id = "http://host/announce.mp3?t=abc"
     player.query = "q"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
@@ -658,11 +766,47 @@ def test_stop_resets_player_state(monkeypatch):
     assert player.query is None
     assert player.queue == []
     assert player.index == -1
-    assert player._announcing is False
+    assert player._announcing_content_id is None
     fake_device.stop.assert_called_once()
 
 
+def test_get_device_uses_the_configured_name(monkeypatch):
+    monkeypatch.setenv("NEST_DEVICE_NAME", "Cucinino")
+    monkeypatch.setattr(castyt, "CattDevice", Mock(return_value=Mock()))
+
+    castyt._get_device()
+
+    castyt.CattDevice.assert_called_once_with("Cucinino")
+
+
+def test_get_device_discovers_a_cast_when_no_name_is_set(monkeypatch):
+    monkeypatch.delenv("NEST_DEVICE_NAME", raising=False)
+    monkeypatch.setattr(
+        castyt,
+        "get_cast_infos",
+        lambda: [
+            SimpleNamespace(friendly_name="Cucinino", host="192.168.1.50"),
+            SimpleNamespace(friendly_name="Salotto", host="192.168.1.60"),
+        ],
+    )
+    monkeypatch.setattr(castyt, "CattDevice", Mock(return_value=Mock()))
+
+    castyt._get_device()
+
+    castyt.CattDevice.assert_called_once_with(ip_addr="192.168.1.50")
+
+
+def test_get_device_raises_device_unavailable_when_no_cast_is_found(monkeypatch):
+    monkeypatch.delenv("NEST_DEVICE_NAME", raising=False)
+    monkeypatch.setattr(castyt, "DISCOVERY_RETRIES", 1)
+    monkeypatch.setattr(castyt, "get_cast_infos", lambda: [])
+
+    with pytest.raises(castyt.DeviceUnavailable):
+        castyt._get_device()
+
+
 def test_get_device_raises_device_unavailable(monkeypatch):
+    monkeypatch.setenv("NEST_DEVICE_NAME", "Cucinino")
     monkeypatch.setattr(castyt, "DISCOVERY_RETRIES", 2)
     monkeypatch.setattr(castyt.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(castyt, "CattDevice", Mock(side_effect=CastError("nope")))
@@ -711,7 +855,7 @@ def test_new_media_status_swallows_device_unavailable():
 def test_stop_clears_state_when_device_unavailable(monkeypatch):
     monkeypatch.setattr(castyt, "_get_device", Mock(side_effect=castyt.DeviceUnavailable("nope")))
     player = castyt.Player()
-    player._announcing = True
+    player._announcing_content_id = "http://host/announce.mp3?t=abc"
     player.query = "q"
     player.queue = [{"id": "a", "title": "A", "url": "u"}]
     player.index = 0
@@ -721,4 +865,3 @@ def test_stop_clears_state_when_device_unavailable(monkeypatch):
     assert player.query is None
     assert player.queue == []
     assert player.index == -1
-    assert player._announcing is False

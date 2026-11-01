@@ -2,12 +2,15 @@
 
 import logging
 import os
+import queue
 import random
 import threading
 import time
+from collections import namedtuple
 
 import zeroconf
 from catt.api import CattDevice
+from catt.discovery import get_cast_infos
 from catt.error import CastError
 from catt.stream_info import StreamInfo
 from yt_dlp import YoutubeDL
@@ -31,12 +34,24 @@ def _nest_device_name():
     return os.environ.get("NEST_DEVICE_NAME")
 
 
+def _discover_cast():
+    """Return the host of the first Chromecast found on the LAN, for installs that
+    don't pin NEST_DEVICE_NAME. Sorted so several speakers always resolve to the
+    same one."""
+    infos = sorted(get_cast_infos(), key=lambda info: info.friendly_name)
+    if not infos:
+        raise CastError("No Chromecast found on the network")
+    return infos[0].host
+
+
 def _get_device():
     last_error = None
     for attempt in range(DISCOVERY_RETRIES):
         try:
             name = _nest_device_name()
-            return CattDevice(name) if name else CattDevice()
+            if name:
+                return CattDevice(name)
+            return CattDevice(ip_addr=_discover_cast())
         except CastError as exc:
             last_error = exc
             if attempt < DISCOVERY_RETRIES - 1:
@@ -46,20 +61,59 @@ def _get_device():
     raise DeviceUnavailable(f"{target} could not be found on the network") from last_error
 
 
-def _media_session_id(device):
-    status = getattr(getattr(device, "_cast", None), "media_controller", None)
-    session_id = getattr(getattr(status, "status", None), "media_session_id", None)
-    return session_id if isinstance(session_id, int) else None
+# The fields `Player` reads from a status, copied out of pychromecast's mutable one.
+_MediaStatus = namedtuple("_MediaStatus", "player_state idle_reason content_id")
 
 
-def _is_our_session(finished_content_id, finished_session_id, content_id, session_id):
-    """Whether a FINISHED status can be proven to belong to a session we started.
-    A reported session id is authoritative; the content id is only a fallback when
-    one side has no session id. Announcements reuse one URL, so a conflicting
-    session id must not be overridden by a matching content id."""
-    if session_id is not None and finished_session_id is not None:
-        return finished_session_id == session_id
-    return content_id is not None and finished_content_id == content_id
+def _snapshot_status(status):
+    return _MediaStatus(
+        getattr(status, "player_state", None),
+        getattr(status, "idle_reason", None),
+        getattr(status, "content_id", None),
+    )
+
+
+class _StatusDispatcher:
+    """Runs media-status handling on a worker instead of pychromecast's socket
+    thread.
+
+    The handler takes `Player._lock`, and play_search/skip/announce hold that lock
+    while blocked on responses only the socket thread can deliver, so handling a
+    status inline would stall the load it is waiting for. A single worker keeps
+    statuses in arrival order, each copied out because pychromecast rewrites one
+    `MediaStatus` object in place.
+    """
+
+    def __init__(self, player):
+        self._player = player
+        self._pending = queue.Queue()
+        self._worker = None
+
+    def new_media_status(self, status):
+        if self._worker is None:
+            self._worker = threading.Thread(target=self._run, name="cast-media-status", daemon=True)
+            self._worker.start()
+        self._pending.put((_snapshot_status(status), None))
+
+    def drain(self, timeout=5.0):
+        """Return once every status queued so far has been handled."""
+        if self._worker is None:
+            return
+        handled = threading.Event()
+        self._pending.put((None, handled))
+        if not handled.wait(timeout):
+            raise TimeoutError("media status worker did not catch up")
+
+    def _run(self):
+        while True:
+            status, handled = self._pending.get()
+            if handled is not None:
+                handled.set()
+                continue
+            try:
+                self._player.new_media_status(status)
+            except Exception:
+                logger.exception("Error handling media status")
 
 
 def _fetch_live(query, fetch_count):
@@ -102,21 +156,17 @@ class Player:
         self._device = None
         self._zconf = None
         self._lock = threading.Lock()
+        self._status_dispatcher = _StatusDispatcher(self)
         self.query = None
         self.queue = []
         self.index = -1
-        self._announcing = False
         self._announcing_content_id = None
-        self._announcing_session_id = None
         self._track_started_at = 0
         self._interrupted_at_seconds = None
         self._current_content_id = None
-        self._current_session_id = None
 
     def _clear_announcing(self):
-        self._announcing = False
         self._announcing_content_id = None
-        self._announcing_session_id = None
 
     def _live_zconf(self):
         """Return a persistent zeroconf instance, created once and never
@@ -131,7 +181,7 @@ class Player:
         if self._device is None:
             self._device = _get_device()
             self._device._cast.socket_client.zconf = self._live_zconf()
-            self._device._cast.media_controller.register_status_listener(self)
+            self._device._cast.media_controller.register_status_listener(self._status_dispatcher)
         return self._device
 
     def _reset_cast_device_locked(self):
@@ -139,72 +189,81 @@ class Player:
         the device from scratch."""
         if self._device is not None:
             try:
-                self._device._cast.disconnect(blocking=False)
+                self._device._cast.disconnect(timeout=0)
             except Exception:
                 logger.exception("Error disconnecting stale Chromecast device")
             self._device = None
 
+    def _end_announcement_locked(self):
+        """The announcement is over, however it ended; bring the queue back."""
+        self._clear_announcing()
+        if not 0 <= self.index < len(self.queue):
+            return
+        title = self.queue[self.index].get("title")
+        try:
+            self._play_current_locked(current_time=self._interrupted_at_seconds)
+            logger.info("Resumed %r at %.1fs", title, self._interrupted_at_seconds or 0)
+            return
+        except DeviceUnavailable:
+            logger.warning("Speaker unavailable; not resuming %r after announcement", title)
+            return
+        except CastError:
+            logger.exception("Failed to resume %r after announcement", title)
+            self._reset_cast_device_locked()
+            self.index += 1
+        except Exception:
+            logger.exception("Failed to resume %r after announcement", title)
+            self.index += 1
+        try:
+            self._try_play_locked()
+        except DeviceUnavailable:
+            logger.warning("Speaker unavailable; not resuming queue")
+
     def new_media_status(self, status):
-        if status.player_state != "IDLE" or status.idle_reason != "FINISHED":
+        if status.player_state != "IDLE":
+            return
+        if status.idle_reason == "ERROR":
+            # A media the device gave up on never reaches FINISHED, which would
+            # leave an announcement in flight and the queue interrupted.
+            with self._lock:
+                if status.content_id != self._announcing_content_id:
+                    return
+                logger.warning("Announcement failed to play; resuming")
+                self._end_announcement_locked()
+            return
+        if status.idle_reason != "FINISHED":
+            if self._announcing_content_id is not None:
+                logger.info(
+                    "Idle (%s) while announcing, content %r",
+                    status.idle_reason,
+                    status.content_id,
+                )
             return
         with self._lock:
             finished_content_id = getattr(status, "content_id", None)
-            finished_session_id = getattr(status, "media_session_id", None)
-            if self._announcing:
-                if not _is_our_session(
-                    finished_content_id,
-                    finished_session_id,
-                    self._announcing_content_id,
-                    self._announcing_session_id,
-                ):
-                    # Can't prove this finish is our announcement, so the user replaced
-                    # it; drop the resume rather than firing it over their media.
-                    logger.info("Finished session is not our announcement; dropping resume")
-                    self._clear_announcing()
+            if self._announcing_content_id is not None:
+                if finished_content_id != self._announcing_content_id:
+                    # Either an announcement we replaced or the user's own media.
+                    # Neither may resume the queue.
+                    logger.info(
+                        "Ignoring finished content %r while announcing %r",
+                        finished_content_id,
+                        self._announcing_content_id,
+                    )
                     return
-                self._clear_announcing()
-                if 0 <= self.index < len(self.queue):
-                    try:
-                        self._play_current_locked(current_time=self._interrupted_at_seconds)
-                        return
-                    except DeviceUnavailable:
-                        logger.warning(
-                            "Speaker unavailable; not resuming %r after announcement",
-                            self.queue[self.index].get("title"),
-                        )
-                        return
-                    except CastError:
-                        logger.exception(
-                            "Failed to resume %r after announcement",
-                            self.queue[self.index].get("title"),
-                        )
-                        self._reset_cast_device_locked()
-                        self.index += 1
-                    except Exception:
-                        logger.exception(
-                            "Failed to resume %r after announcement",
-                            self.queue[self.index].get("title"),
-                        )
-                        self.index += 1
-                    try:
-                        self._try_play_locked()
-                    except DeviceUnavailable:
-                        logger.warning("Speaker unavailable; not resuming queue")
+                self._end_announcement_locked()
                 return
             if self.query is None or not self.queue:
                 # new_media_status sees every session on the device, not just
                 # ours, so a FINISHED can belong to media the user started.
                 logger.info("No active playback queue; ignoring finished media")
                 return
-            if not _is_our_session(
-                finished_content_id,
-                finished_session_id,
-                self._current_content_id,
-                self._current_session_id,
-            ):
-                # Can't prove the finished session is the one we started, so it isn't
-                # ours to advance.
-                logger.info("Finished session is not the track we are playing; ignoring")
+            if finished_content_id != self._current_content_id:
+                # The finished media isn't the one we loaded, so it isn't ours to
+                # advance.
+                logger.info(
+                    "Finished content %r is not the track we are playing", finished_content_id
+                )
                 return
             try:
                 self._play_next_locked()
@@ -218,19 +277,18 @@ class Player:
         time, not the device's actual playback position, so it can drift by a
         few seconds)."""
         with self._lock:
-            self._announcing = True
             self._announcing_content_id = url
-            if 0 <= self.index < len(self.queue):
-                self._interrupted_at_seconds = time.monotonic() - self._track_started_at
-            else:
-                self._interrupted_at_seconds = None
+            playing = self.queue[self.index] if 0 <= self.index < len(self.queue) else None
+            self._interrupted_at_seconds = (
+                time.monotonic() - self._track_started_at if playing else None
+            )
+            logger.info("Announcing over %r", playing.get("title") if playing else None)
             try:
                 device = self._ensure_device()
                 device.controller.prep_app()
                 device.controller.play_media_url(
                     url, content_type=content_type, stream_type="BUFFERED"
                 )
-                self._announcing_session_id = _media_session_id(device)
             except DeviceUnavailable:
                 self._clear_announcing()
                 raise
@@ -240,9 +298,8 @@ class Player:
 
     def _play_current_locked(self, current_time=None):
         entry = self.queue[self.index]
-        # A failed attempt must not leave the previous track's ids looking like ours.
+        # A failed attempt must not leave the previous track's id looking like ours.
         self._current_content_id = None
-        self._current_session_id = None
         device = self._ensure_device()
         stream = StreamInfo(entry["url"], cast_info=device._cast.cast_info)
         device.controller.prep_app()
@@ -256,7 +313,6 @@ class Player:
         )
         self._track_started_at = time.monotonic() - (current_time or 0)
         self._current_content_id = stream.video_url
-        self._current_session_id = _media_session_id(device)
 
     def _play_next_locked(self):
         self.index += 1
@@ -275,6 +331,7 @@ class Player:
             try:
                 self._play_current_locked()
                 storage.record_play(self.query, entry["id"])
+                logger.info("Playing %r", entry.get("title"))
                 return entry
             except DeviceUnavailable:
                 # An unreachable speaker isn't a bad track; don't skip through

@@ -48,7 +48,8 @@ Bot / casting:
 
 - `TELEGRAM_BOT_TOKEN` — required, from @BotFather.
 - `NEST_DEVICE_NAME` — Chromecast friendly name to cast to (e.g. `Cucinino`, found via
-  `./.venv/bin/catt scan`). If unset, `catt`'s configured default device is used.
+  `./.venv/bin/catt scan`). If unset, the first Chromecast found on the network by
+  discovery is used.
 - `OWNER_USER_ID` — required, your Telegram user id (send `/whoami` to the bot to find
   it). Always allowed to use the bot regardless of `ALLOWED_USER_IDS`, and gets a
   Telegram message whenever another user's `/play` or `/stop` is denied (with that
@@ -121,10 +122,10 @@ dev dependencies plus `pre-commit`, and registers the git hooks.
 ```
 
 `requirements-dev.txt` pulls in `requirements.txt` plus `pytest`. The test suite
-covers the search-ranking/caching logic in `castyt.py`, the play-history storage
-logic in `storage.py`, with the actual `yt-dlp`/sqlite calls mocked/isolated.
-Everything that touches the real Chromecast, camera, or Telegram API has no
-automated coverage — verify those manually against the real Nest Mini.
+covers search/casting, the bot handlers, motion detection, announcements/TTS and
+storage, with network, device and Telegram I/O mocked. Nothing exercises the real
+speaker automatically, so verify casting changes by running the bot against the
+Nest Mini.
 
 ## Bot commands
 
@@ -138,6 +139,8 @@ automated coverage — verify those manually against the real Nest Mini.
 - `/announce <text>` — speak a custom message on the Nest Mini, interrupting current
   playback, then resume it from approximately where it left off. Same two-step prompt
   as `/play` if sent with no text.
+- `/nowplaying` — show the current track and its playback state.
+- `/skip` — skip to the next queued result.
 - `/stop` — stop playback and clear the queue.
 - `/whoami` — reply with your Telegram user id, to put in `OWNER_USER_ID` /
   `ALLOWED_USER_IDS`.
