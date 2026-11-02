@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -864,4 +865,126 @@ def test_stop_clears_state_when_device_unavailable(monkeypatch):
 
     assert player.query is None
     assert player.queue == []
+    assert player.index == -1
+
+
+def test_poll_heartbeat_detects_external_stop(monkeypatch):
+    # When the device has stopped externally (reboot, crash, etc.), the
+    # heartbeat must clear the queue so the bot doesn't resume the old track
+    # on the next announcement.
+    device = _FakeDevice()
+    device.controller.info.get.return_value = "IDLE"
+    monkeypatch.setattr(castyt, "_get_device", lambda: device)
+
+    player = castyt.Player()
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._track_started_at = 100.0
+    player._ensure_device()
+
+    player._poll_heartbeat()
+
+    assert player.query is None
+    assert player.queue == []
+    assert player.index == -1
+
+
+def test_poll_heartbeat_does_nothing_when_playing():
+    device = _FakeDevice()
+    device.controller.info.get.return_value = "PLAYING"
+    player = castyt.Player()
+    player._device = device
+    player.query = "q"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._track_started_at = 100.0
+
+    player._poll_heartbeat()
+
+    assert player.query == "q"
+    assert player.index == 0
+
+
+def test_poll_heartbeat_does_nothing_without_queue():
+    player = castyt.Player()
+    player.query = None
+    player.queue = []
+    player.index = -1
+
+    player._poll_heartbeat()
+
+    assert player.index == -1
+
+
+def test_start_polling_starts_thread(monkeypatch):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+    monkeypatch.setattr(castyt.time, "sleep", lambda seconds: None)
+
+    player = castyt.Player()
+    player._ensure_device()
+
+    player._start_polling()
+
+    assert player._polling_active
+    assert player._poll_thread is not None
+    player._stop_polling()
+
+
+def test_play_search_starts_polling_on_success(monkeypatch):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+    monkeypatch.setattr(castyt, "StreamInfo", _FakeStreamInfo)
+    monkeypatch.setattr(castyt.time, "sleep", lambda seconds: None)
+
+    player = castyt.Player()
+
+    player.play_search("daft punk")
+
+    assert player._polling_active
+
+
+def test_stop_stops_polling(monkeypatch, caplog):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+    monkeypatch.setattr(castyt.time, "sleep", lambda seconds: None)
+
+    player = castyt.Player()
+    player._polling_active = True
+
+    def _fake_loop():
+        while player._polling_active:
+            time.sleep(0.01)
+
+    player._poll_thread = threading.Thread(target=_fake_loop, daemon=True)
+    player._poll_thread.start()
+
+    with caplog.at_level(logging.INFO, logger="castyt"):
+        player.stop()
+
+    assert not player._polling_active
+    assert player._poll_thread is None
+
+
+def test_end_announcement_locked_skips_resume_if_device_idle():
+    # If the device was externally stopped before the announcement finished,
+    # resuming the old track is meaningless.
+    device = _FakeDevice()
+    device.controller.info.get.return_value = "IDLE"
+    player = castyt.Player()
+    player._device = device
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    player.new_media_status(
+        _media_status(
+            content_id="http://host/announce.mp3?t=first",
+            state="IDLE",
+            idle_reason="FINISHED",
+        )
+    )
+
+    player._play_current_locked.assert_not_called()
+    assert player._announcing_content_id is None
     assert player.index == -1
