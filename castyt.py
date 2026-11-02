@@ -166,7 +166,8 @@ class Player:
         self._track_started_at = 0
         self._interrupted_at_seconds = None
         self._current_content_id = None
-        self._polling_active = False
+        self._poll_guard = threading.Lock()
+        self._poll_stop_event = None
         self._poll_thread = None
 
     def _clear_announcing(self):
@@ -208,44 +209,64 @@ class Player:
         self._clear_announcing()
 
     def _poll_heartbeat(self):
-        """Check if the device is still playing. If it has stopped externally,
-        clear the queue so we don't resume stale tracks on the next announce."""
+        """Clear the playback state when the speaker has stopped on its own.
+
+        A device that reboots or falls off the network never reports a final
+        status, so without this the next announcement would resume a track that
+        is no longer playing."""
         with self._lock:
             if not self.queue or self.index < 0:
+                return
+            if self._announcing_content_id is not None:
+                # The speaker is playing our announcement, not the queue.
                 return
             if not self._device:
                 return
             try:
-                state = self._device.controller.info.get("player_state")
+                info = self._device.controller.info
             except Exception:
                 return
-            if state in (None, "IDLE"):
-                self._cleanup_external_stop()
+            if info.get("player_state") not in (None, "IDLE"):
+                return
+            idle_content_id = info.get("content_id")
+            if idle_content_id is not None and idle_content_id == self._current_content_id:
+                # Our track ended by itself; the status listener advances the queue.
+                return
+            self._cleanup_external_stop()
 
     def _start_polling(self):
         """Start a background thread that checks device state periodically
         while music is playing."""
-        if self._polling_active:
-            return
-        self._polling_active = True
-        self._poll_thread = threading.Thread(
-            target=self._poll_loop, name="cast-heartbeat", daemon=True
-        )
-        self._poll_thread.start()
+        with self._poll_guard:
+            if self._poll_thread is not None:
+                return
+            stop_event = threading.Event()
+            self._poll_stop_event = stop_event
+            self._poll_thread = threading.Thread(
+                target=self._poll_loop,
+                args=(stop_event,),
+                name="cast-heartbeat",
+                daemon=True,
+            )
+            self._poll_thread.start()
 
     def _stop_polling(self):
-        """Stop the background polling thread."""
-        self._polling_active = False
-        thread = self._poll_thread
-        self._poll_thread = None
+        """Stop the background polling thread and wait for it to exit."""
+        with self._poll_guard:
+            stop_event = self._poll_stop_event
+            thread = self._poll_thread
+            self._poll_stop_event = None
+            self._poll_thread = None
+        if stop_event is not None:
+            stop_event.set()
         if thread is not None:
-            thread.join(timeout=3)
+            thread.join()
 
-    def _poll_loop(self):
-        while self._polling_active:
+    def _poll_loop(self, stop_event):
+        # The first check waits a full interval: right after a load the cached
+        # status can still describe the track that just ended.
+        while not stop_event.wait(HEARTBEAT_INTERVAL_SECONDS):
             self._poll_heartbeat()
-            # sleep releases the GIL, so we wake promptly on _polling_active=False
-            time.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
     def _end_announcement_locked(self):
         """The announcement is over, however it ended; bring the queue back."""
