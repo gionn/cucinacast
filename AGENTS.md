@@ -40,7 +40,10 @@ requiring a configured default device.
 `tests/` has mocked unit tests covering `castyt`, `storage`, `bot`, `motion`,
 `announce`, `tts`, `phrases` and `sounds`; no hardware or network is involved.
 `tests/conftest.py` repoints `storage.DB_PATH` at a per-test temp directory and
-sets fake Telegram env vars, so tests never touch the real `cucinacast.db`.
+sets fake Telegram env vars, so tests never touch the real `cucinacast.db`. Its
+session fixture also makes any non-loopback socket call raise, so a test that
+forgets to stub one fails everywhere instead of passing on a machine that is
+online.
 
 Nothing drives the real speaker, camera or Telegram API automatically. Check
 casting and motion changes by running `bot.py` against the Nest Mini. Stop the
