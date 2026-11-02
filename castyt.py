@@ -25,6 +25,8 @@ SEARCH_POOL_SIZE = 20
 DISCOVERY_RETRIES = 3
 DISCOVERY_RETRY_DELAY_SECONDS = 3
 
+HEARTBEAT_INTERVAL_SECONDS = 60
+
 
 class DeviceUnavailable(Exception):
     """The speaker could not be reached, as opposed to a track that failed."""
@@ -164,6 +166,9 @@ class Player:
         self._track_started_at = 0
         self._interrupted_at_seconds = None
         self._current_content_id = None
+        self._poll_guard = threading.Lock()
+        self._poll_stop_event = None
+        self._poll_thread = None
 
     def _clear_announcing(self):
         self._announcing_content_id = None
@@ -193,6 +198,75 @@ class Player:
             except Exception:
                 logger.exception("Error disconnecting stale Chromecast device")
             self._device = None
+
+    def _cleanup_external_stop(self):
+        """Reset the player's playback state because the device stopped
+        externally (reboot, crash, network dropout)."""
+        logger.info("Device stopped externally; clearing playback state")
+        self.query = None
+        self.queue = []
+        self.index = -1
+        self._clear_announcing()
+
+    def _poll_heartbeat(self):
+        """Clear the playback state when the speaker has stopped on its own.
+
+        A device that reboots or falls off the network never reports a final
+        status, so without this the next announcement would resume a track that
+        is no longer playing."""
+        with self._lock:
+            if not self.queue or self.index < 0:
+                return
+            if self._announcing_content_id is not None:
+                # The speaker is playing our announcement, not the queue.
+                return
+            if not self._device:
+                return
+            try:
+                info = self._device.controller.info
+            except Exception:
+                return
+            if info.get("player_state") not in (None, "IDLE"):
+                return
+            idle_content_id = info.get("content_id")
+            if idle_content_id is not None and idle_content_id == self._current_content_id:
+                # Our track ended by itself; the status listener advances the queue.
+                return
+            self._cleanup_external_stop()
+
+    def _start_polling(self):
+        """Start a background thread that checks device state periodically
+        while music is playing."""
+        with self._poll_guard:
+            if self._poll_thread is not None:
+                return
+            stop_event = threading.Event()
+            self._poll_stop_event = stop_event
+            self._poll_thread = threading.Thread(
+                target=self._poll_loop,
+                args=(stop_event,),
+                name="cast-heartbeat",
+                daemon=True,
+            )
+            self._poll_thread.start()
+
+    def _stop_polling(self):
+        """Stop the background polling thread and wait for it to exit."""
+        with self._poll_guard:
+            stop_event = self._poll_stop_event
+            thread = self._poll_thread
+            self._poll_stop_event = None
+            self._poll_thread = None
+        if stop_event is not None:
+            stop_event.set()
+        if thread is not None:
+            thread.join()
+
+    def _poll_loop(self, stop_event):
+        # The first check waits a full interval: right after a load the cached
+        # status can still describe the track that just ended.
+        while not stop_event.wait(HEARTBEAT_INTERVAL_SECONDS):
+            self._poll_heartbeat()
 
     def _end_announcement_locked(self):
         """The announcement is over, however it ended; bring the queue back."""
@@ -373,6 +447,7 @@ class Player:
             played = self._try_play_locked()
         if not played:
             raise RuntimeError(f"No playable YouTube results for {query!r}")
+        self._start_polling()
         return played["title"], played["url"]
 
     def skip(self):
@@ -401,6 +476,7 @@ class Player:
         return entry["title"], entry["url"], state
 
     def stop(self):
+        self._stop_polling()
         with self._lock:
             self.query = None
             self.queue = []
