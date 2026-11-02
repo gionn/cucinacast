@@ -250,14 +250,6 @@ class Player:
     def _end_announcement_locked(self):
         """The announcement is over, however it ended; bring the queue back."""
         self._clear_announcing()
-        # If the device has been externally stopped, the old track is gone.
-        try:
-            state = self._device.controller.info.get("player_state") if self._device else None
-        except Exception:
-            state = None
-        if state == "IDLE":
-            self._cleanup_external_stop()
-            return
         if not 0 <= self.index < len(self.queue):
             return
         title = self.queue[self.index].get("title")

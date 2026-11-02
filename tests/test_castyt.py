@@ -964,9 +964,9 @@ def test_stop_stops_polling(monkeypatch, caplog):
     assert player._poll_thread is None
 
 
-def test_end_announcement_locked_skips_resume_if_device_idle():
-    # If the device was externally stopped before the announcement finished,
-    # resuming the old track is meaningless.
+def test_resume_after_announcement_when_device_reports_idle():
+    # The receiver reports IDLE for the announcement it has just finished, so the
+    # device state alone cannot tell a normal ending from an external stop.
     device = _FakeDevice()
     device.controller.info.get.return_value = "IDLE"
     player = castyt.Player()
@@ -985,6 +985,5 @@ def test_end_announcement_locked_skips_resume_if_device_idle():
         )
     )
 
-    player._play_current_locked.assert_not_called()
+    player._play_current_locked.assert_called_once_with(current_time=12.3)
     assert player._announcing_content_id is None
-    assert player.index == -1
