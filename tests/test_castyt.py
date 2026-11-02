@@ -935,12 +935,19 @@ def test_play_search_starts_polling_on_success(monkeypatch):
     monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
     monkeypatch.setattr(castyt, "StreamInfo", _FakeStreamInfo)
     monkeypatch.setattr(castyt.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        castyt,
+        "search_youtube",
+        lambda query, count=0, exclude_ids=frozenset(): [{"id": "a", "title": "A", "url": "u"}],
+    )
 
     player = castyt.Player()
-
-    player.play_search("daft punk")
-
-    assert player._polling_active
+    try:
+        player.play_search("daft punk")
+        assert player._polling_active
+    finally:
+        # time.sleep is a no-op here, so the worker spins until it is told to stop.
+        player._stop_polling()
 
 
 def test_stop_stops_polling(monkeypatch, caplog):
