@@ -497,6 +497,12 @@ def test_failed_media_of_other_content_does_not_resume():
     assert player._announcing_content_id == "http://host/announce.mp3?t=first"
 
 
+def test_live_zeroconf_is_stubbed_offline():
+    # conftest swaps in a stand-in; a real Zeroconf opens multicast sockets
+    # even when nothing is ever browsed.
+    assert getattr(castyt.zeroconf.Zeroconf, "offline", False)
+
+
 def test_ensure_device_injects_live_zeroconf(monkeypatch):
     fake_device = _FakeDevice()
     sentinel_zconf = object()
@@ -865,3 +871,206 @@ def test_stop_clears_state_when_device_unavailable(monkeypatch):
     assert player.query is None
     assert player.queue == []
     assert player.index == -1
+
+
+def test_poll_heartbeat_detects_external_stop(monkeypatch):
+    # When the device has stopped externally (reboot, crash, etc.), the
+    # heartbeat must clear the queue so the bot doesn't resume the old track
+    # on the next announcement.
+    device = _FakeDevice()
+    device.controller.info = {"player_state": "IDLE", "content_id": None}
+    monkeypatch.setattr(castyt, "_get_device", lambda: device)
+
+    player = castyt.Player()
+    player.query = "daft punk"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._track_started_at = 100.0
+    player._current_content_id = "u"
+    player._ensure_device()
+
+    player._poll_heartbeat()
+
+    assert player.query is None
+    assert player.queue == []
+    assert player.index == -1
+
+
+def test_poll_heartbeat_ignores_the_track_that_just_finished():
+    # The device reports IDLE for the track it has finished, which arrives
+    # before the status listener has advanced the queue.
+    device = _FakeDevice()
+    device.controller.info = {
+        "player_state": "IDLE",
+        "idle_reason": "FINISHED",
+        "content_id": "u",
+    }
+    player = castyt.Player()
+    player._device = device
+    player.query = "q"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._current_content_id = "u"
+
+    player._poll_heartbeat()
+
+    assert player.query == "q"
+    assert len(player.queue) == 1
+
+
+@pytest.mark.parametrize("idle_reason", ["CANCELLED", "INTERRUPTED", "ERROR"])
+def test_poll_heartbeat_clears_the_queue_when_the_track_was_stopped(idle_reason):
+    # The receiver keeps the content id when it stops our track for any reason
+    # other than reaching its end, so a matching id alone means nothing.
+    device = _FakeDevice()
+    device.controller.info = {
+        "player_state": "IDLE",
+        "idle_reason": idle_reason,
+        "content_id": "u",
+    }
+    player = castyt.Player()
+    player._device = device
+    player.query = "q"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._current_content_id = "u"
+
+    player._poll_heartbeat()
+
+    assert player.query is None
+    assert player.queue == []
+    assert player.index == -1
+
+
+def test_poll_heartbeat_skips_while_announcing():
+    device = _FakeDevice()
+    device.controller.info = {"player_state": "IDLE", "content_id": "http://host/a.mp3"}
+    player = castyt.Player()
+    player._device = device
+    player.query = "q"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._current_content_id = "u"
+    player._announcing_content_id = "http://host/a.mp3"
+
+    player._poll_heartbeat()
+
+    assert player.query == "q"
+    assert player._announcing_content_id == "http://host/a.mp3"
+
+
+def test_poll_heartbeat_does_nothing_when_playing():
+    device = _FakeDevice()
+    device.controller.info = {"player_state": "PLAYING", "content_id": "u"}
+    player = castyt.Player()
+    player._device = device
+    player.query = "q"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._track_started_at = 100.0
+
+    player._poll_heartbeat()
+
+    assert player.query == "q"
+    assert player.index == 0
+
+
+def test_poll_heartbeat_does_nothing_without_queue():
+    player = castyt.Player()
+    player.query = None
+    player.queue = []
+    player.index = -1
+
+    player._poll_heartbeat()
+
+    assert player.index == -1
+
+
+def test_start_polling_starts_the_worker():
+    player = castyt.Player()
+
+    player._start_polling()
+    try:
+        assert player._poll_thread is not None
+        assert player._poll_thread.is_alive()
+    finally:
+        player._stop_polling()
+
+
+def test_start_polling_keeps_a_single_worker():
+    player = castyt.Player()
+
+    player._start_polling()
+    worker = player._poll_thread
+    player._start_polling()
+    try:
+        assert player._poll_thread is worker
+    finally:
+        player._stop_polling()
+
+
+def test_stop_polling_interrupts_the_wait_between_checks():
+    player = castyt.Player()
+
+    player._start_polling()
+    worker = player._poll_thread
+    player._stop_polling()
+
+    assert not worker.is_alive()
+    assert player._poll_thread is None
+
+
+def test_play_search_starts_polling_on_success(monkeypatch):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+    monkeypatch.setattr(castyt, "StreamInfo", _FakeStreamInfo)
+    monkeypatch.setattr(
+        castyt,
+        "search_youtube",
+        lambda query, count=0, exclude_ids=frozenset(): [{"id": "a", "title": "A", "url": "u"}],
+    )
+
+    player = castyt.Player()
+    try:
+        player.play_search("daft punk")
+        assert player._poll_thread is not None
+    finally:
+        player._stop_polling()
+
+
+def test_stop_stops_polling(monkeypatch, caplog):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+
+    player = castyt.Player()
+    player._start_polling()
+    worker = player._poll_thread
+
+    with caplog.at_level(logging.INFO, logger="castyt"):
+        player.stop()
+
+    assert not worker.is_alive()
+    assert player._poll_thread is None
+
+
+def test_resume_after_announcement_when_device_reports_idle():
+    # The receiver reports IDLE for the announcement it has just finished, so the
+    # device state alone cannot tell a normal ending from an external stop.
+    device = _FakeDevice()
+    device.controller.info.get.return_value = "IDLE"
+    player = castyt.Player()
+    player._device = device
+    player._announcing_content_id = "http://host/announce.mp3?t=first"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._interrupted_at_seconds = 12.3
+    player._play_current_locked = Mock()
+
+    player.new_media_status(
+        _media_status(
+            content_id="http://host/announce.mp3?t=first",
+            state="IDLE",
+            idle_reason="FINISHED",
+        )
+    )
+
+    player._play_current_locked.assert_called_once_with(current_time=12.3)
+    assert player._announcing_content_id is None
