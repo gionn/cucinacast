@@ -67,6 +67,11 @@ def _get_device():
 _MediaStatus = namedtuple("_MediaStatus", "player_state idle_reason content_id")
 
 
+def _public_url(entry):
+    """Hide Navidrome stream URLs from chat: they carry an auth token."""
+    return None if entry.get("content_type") else entry["url"]
+
+
 def _snapshot_status(status):
     return _MediaStatus(
         getattr(status, "player_state", None),
@@ -160,6 +165,7 @@ class Player:
         self._lock = threading.Lock()
         self._status_dispatcher = _StatusDispatcher(self)
         self.query = None
+        self.source = None
         self.queue = []
         self.index = -1
         self._announcing_content_id = None
@@ -199,14 +205,18 @@ class Player:
                 logger.exception("Error disconnecting stale Chromecast device")
             self._device = None
 
+    def _clear_queue_locked(self):
+        self.query = None
+        self.source = None
+        self.queue = []
+        self.index = -1
+        self._clear_announcing()
+
     def _cleanup_external_stop(self):
         """Reset the player's playback state because the device stopped
         externally (reboot, crash, network dropout)."""
         logger.info("Device stopped externally; clearing playback state")
-        self.query = None
-        self.queue = []
-        self.index = -1
-        self._clear_announcing()
+        self._clear_queue_locked()
 
     def _poll_heartbeat(self):
         """Clear the playback state when the speaker has stopped on its own.
@@ -379,18 +389,32 @@ class Player:
         # A failed attempt must not leave the previous track's id looking like ours.
         self._current_content_id = None
         device = self._ensure_device()
-        stream = StreamInfo(entry["url"], cast_info=device._cast.cast_info)
-        device.controller.prep_app()
-        device.controller.play_media_url(
-            stream.video_url,
-            title=stream.video_title,
-            content_type=stream.guessed_content_type,
-            thumb=stream.video_thumbnail,
-            stream_type=stream.stream_type,
-            current_time=current_time,
-        )
+        if entry.get("content_type"):
+            # A Navidrome stream is already a plain audio URL; resolving it
+            # through yt-dlp would fail.
+            device.controller.prep_app()
+            device.controller.play_media_url(
+                entry["url"],
+                title=entry.get("title"),
+                content_type=entry["content_type"],
+                thumb=entry.get("thumb"),
+                stream_type="BUFFERED",
+                current_time=current_time,
+            )
+            self._current_content_id = entry["url"]
+        else:
+            stream = StreamInfo(entry["url"], cast_info=device._cast.cast_info)
+            device.controller.prep_app()
+            device.controller.play_media_url(
+                stream.video_url,
+                title=stream.video_title,
+                content_type=stream.guessed_content_type,
+                thumb=stream.video_thumbnail,
+                stream_type=stream.stream_type,
+                current_time=current_time,
+            )
+            self._current_content_id = stream.video_url
         self._track_started_at = time.monotonic() - (current_time or 0)
-        self._current_content_id = stream.video_url
 
     def _play_next_locked(self):
         self.index += 1
@@ -404,6 +428,8 @@ class Player:
             if self.index >= len(self.queue):
                 self._grow_queue_locked()
                 if self.index >= len(self.queue):
+                    if self.source == "navidrome":
+                        self._clear_queue_locked()
                     return None
             entry = self.queue[self.index]
             try:
@@ -426,6 +452,9 @@ class Player:
         return None
 
     def _grow_queue_locked(self):
+        if self.source == "navidrome":
+            # An album queue is finite: it ends with its last track.
+            return
         if not self.query:
             # Without a query this would become a literal "ytsearchN:None" search.
             logger.warning("Not growing queue: no active query")
@@ -445,6 +474,7 @@ class Player:
         )
         with self._lock:
             self.query = query
+            self.source = "youtube"
             self.queue = entries
             self.index = 0
             self._clear_announcing()  # a fresh /play supersedes any in-flight announcement
@@ -454,6 +484,22 @@ class Player:
         self._start_polling()
         return played["title"], played["url"]
 
+    def play_entries(self, entries, source, label=None):
+        """Play an already-resolved queue, such as a Navidrome album."""
+        if not entries:
+            raise RuntimeError(f"No tracks to play for {label or source!r}")
+        with self._lock:
+            self.query = label or source
+            self.source = source
+            self.queue = list(entries)
+            self.index = 0
+            self._clear_announcing()
+            played = self._try_play_locked()
+        if not played:
+            raise RuntimeError(f"No playable tracks for {label or source!r}")
+        self._start_polling()
+        return played["title"], _public_url(played)
+
     def skip(self):
         with self._lock:
             if not (0 <= self.index < len(self.queue)):
@@ -461,9 +507,14 @@ class Player:
             self._clear_announcing()
             self.index += 1
             played = self._try_play_locked()
+            if not played and self._device is not None:
+                try:
+                    self._device.stop()
+                except Exception:
+                    logger.exception("Failed to stop playback at the end of the queue")
         if not played:
             raise RuntimeError("No more tracks to play.")
-        return played["title"], played["url"]
+        return played["title"], _public_url(played)
 
     def now_playing(self):
         with self._lock:
@@ -477,12 +528,13 @@ class Player:
                 state = device.controller.info.get("player_state")
             except Exception:
                 logger.exception("Failed to read player state")
-        return entry["title"], entry["url"], state
+        return entry["title"], _public_url(entry), state
 
     def stop(self):
         self._stop_polling()
         with self._lock:
             self.query = None
+            self.source = None
             self.queue = []
             self.index = -1
             self._clear_announcing()

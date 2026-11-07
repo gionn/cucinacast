@@ -4,14 +4,23 @@
 import asyncio
 import logging
 import os
+import secrets
 import sys
 
 from dotenv import load_dotenv
-from telegram import BotCommand, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import Conflict
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 import motion
+import navidrome
 import phrases
 import sounds
 import storage
@@ -35,13 +44,18 @@ OWNER_USER_ID = int(os.environ["OWNER_USER_ID"])
 
 ANNOUNCE_MAX_LENGTH = 200
 
+CALLBACK_PREFIX = "choice:"
+MAX_PENDING_CHOICES = 50
+BUTTON_LABEL_LENGTH = 60
+
+_choices = {}
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "CucinaCast: search YouTube and play it on the Nest Mini speaker.\n\n"
-        "/play <query> - search YouTube and play the top result "
-        "(auto-advances through more results until you /stop); "
-        "if you leave out the query, I'll ask for it\n"
+        "CucinaCast: play music on the Nest Mini speaker.\n\n"
+        "/play <query> - look for albums and tracks on Navidrome first, "
+        "then fall back to YouTube; if you leave out the query, I'll ask for it\n"
         "/announce <text> - speak a custom message on the Nest Mini; "
         "if you leave out the text, I'll ask for it\n"
         "/nowplaying - show the current track\n"
@@ -96,8 +110,78 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _do_play(update, context, query)
 
 
+def _shorten(text):
+    if len(text) <= BUTTON_LABEL_LENGTH:
+        return text
+    return text[: BUTTON_LABEL_LENGTH - 1] + "…"
+
+
+def _album_label(album):
+    name = album.get("name") or "Unknown album"
+    artist = album.get("artist")
+    return _shorten(f"{name} — {artist}" if artist else name)
+
+
+def _song_label(song):
+    title = song.get("title") or "Unknown track"
+    artist = song.get("artist")
+    return _shorten(f"{title} — {artist}" if artist else title)
+
+
+def _playing_text(title, url, state=None):
+    suffix = f" ({state})" if state else ""
+    text = f"Now playing{suffix}: {title}"
+    if url:
+        text += f"\n{url}"
+    return text
+
+
+def _remember_choice(choice):
+    token = secrets.token_hex(6)
+    _choices[token] = choice
+    while len(_choices) > MAX_PENDING_CHOICES:
+        _choices.pop(next(iter(_choices)))
+    return token
+
+
+def _choice_keyboard(query, found):
+    rows = []
+    for album in found["albums"]:
+        token = _remember_choice({"kind": "album", "album": album, "query": query})
+        rows.append(
+            [InlineKeyboardButton(_album_label(album), callback_data=f"{CALLBACK_PREFIX}{token}")]
+        )
+    for song in found["songs"]:
+        token = _remember_choice({"kind": "song", "song": song, "query": query})
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"♪ {_song_label(song)}", callback_data=f"{CALLBACK_PREFIX}{token}"
+                )
+            ]
+        )
+    token = _remember_choice({"kind": "youtube", "query": query})
+    rows.append([InlineKeyboardButton("Search YouTube", callback_data=f"{CALLBACK_PREFIX}{token}")])
+    return InlineKeyboardMarkup(rows)
+
+
 async def _do_play(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
     await update.message.reply_text(f"Searching for: {query}...")
+
+    if navidrome.enabled():
+        try:
+            found = await asyncio.to_thread(navidrome.search, query)
+        except navidrome.NavidromeUnavailable as exc:
+            logger.warning("Navidrome unavailable, falling back to YouTube: %s", exc)
+            found = {"albums": [], "songs": []}
+        if found["albums"] or found["songs"]:
+            await update.message.reply_text(
+                f"Found on Navidrome for: {query}\nPick an album or track:",
+                reply_markup=_choice_keyboard(query, found),
+            )
+            return
+        logger.info("No Navidrome match for %r; searching YouTube", query)
+
     try:
         title, url = await asyncio.to_thread(player.play_search, query)
     except Exception as exc:
@@ -105,7 +189,77 @@ async def _do_play(update: Update, context: ContextTypes.DEFAULT_TYPE, query: st
         await update.message.reply_text(f"Couldn't play that: {exc}")
         return
 
-    await update.message.reply_text(f"Now playing: {title}\n{url}")
+    await update.message.reply_text(_playing_text(title, url))
+
+
+async def _deny_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    await update.callback_query.answer("Not authorized to use this bot.", show_alert=True)
+    if OWNER_USER_ID and OWNER_USER_ID != user.id:
+        await context.bot.send_message(
+            chat_id=OWNER_USER_ID,
+            text=f"Unauthorized access attempt from user id {user.id} ({user.full_name}).",
+        )
+
+
+async def _play_youtube_choice(callback, query):
+    await callback.edit_message_text(f"Searching YouTube for: {query}...")
+    try:
+        title, url = await asyncio.to_thread(player.play_search, query)
+    except Exception as exc:
+        logger.exception("Failed to search/cast %r", query)
+        await callback.edit_message_text(f"Couldn't play that: {exc}")
+        return
+    await callback.edit_message_text(_playing_text(title, url))
+
+
+async def _play_album_choice(callback, album):
+    await callback.edit_message_text(f"Loading album: {_album_label(album)}...")
+    try:
+        selected = await asyncio.to_thread(navidrome.album_entries, album["id"])
+        title, _ = await asyncio.to_thread(
+            player.play_entries, selected["entries"], "navidrome", selected["name"]
+        )
+    except Exception as exc:
+        logger.exception("Failed to play album %r", album.get("name"))
+        await callback.edit_message_text(f"Couldn't play that album: {exc}")
+        return
+    await callback.edit_message_text(f"Now playing album: {_album_label(selected)}\n{title}")
+
+
+async def _play_song_choice(callback, song):
+    await callback.edit_message_text(f"Loading: {_song_label(song)}...")
+    try:
+        entry = await asyncio.to_thread(navidrome.song_entry, song["id"])
+        title, url = await asyncio.to_thread(
+            player.play_entries, [entry], "navidrome", song.get("title") or "track"
+        )
+    except Exception as exc:
+        logger.exception("Failed to play track %r", song.get("title"))
+        await callback.edit_message_text(f"Couldn't play that: {exc}")
+        return
+    await callback.edit_message_text(_playing_text(title, url))
+
+
+async def _on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        await _deny_callback(update, context)
+        return
+
+    callback = update.callback_query
+    await callback.answer()
+    token = (callback.data or "").partition(CALLBACK_PREFIX)[2]
+    choice = _choices.pop(token, None)
+    if choice is None:
+        await callback.edit_message_text("That selection expired. Send /play again.")
+        return
+
+    if choice["kind"] == "youtube":
+        await _play_youtube_choice(callback, choice["query"])
+    elif choice["kind"] == "album":
+        await _play_album_choice(callback, choice["album"])
+    elif choice["kind"] == "song":
+        await _play_song_choice(callback, choice["song"])
 
 
 async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -205,8 +359,7 @@ async def nowplaying(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     title, url, state = result
-    suffix = f" ({state})" if state else ""
-    await update.message.reply_text(f"Now playing{suffix}: {title}\n{url}")
+    await update.message.reply_text(_playing_text(title, url, state))
 
 
 async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -229,7 +382,7 @@ async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Couldn't skip: {exc}")
         return
 
-    await update.message.reply_text(f"Now playing: {title}\n{url}")
+    await update.message.reply_text(_playing_text(title, url))
 
 
 conflict_detected = False
@@ -274,7 +427,7 @@ async def post_init(app: Application) -> None:
     global _motion_task
     await app.bot.set_my_commands(
         [
-            BotCommand("play", "Search YouTube and play"),
+            BotCommand("play", "Play from Navidrome or YouTube"),
             BotCommand("announce", "Speak a custom message"),
             BotCommand("nowplaying", "Show the current track"),
             BotCommand("skip", "Skip to the next track"),
@@ -315,6 +468,7 @@ def main() -> None:
     app.add_handler(CommandHandler("skip", skip))
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("whoami", whoami))
+    app.add_handler(CallbackQueryHandler(_on_choice, pattern=f"^{CALLBACK_PREFIX}"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _route_text))
     app.add_error_handler(error_handler)
     app.run_polling()

@@ -1074,3 +1074,161 @@ def test_resume_after_announcement_when_device_reports_idle():
 
     player._play_current_locked.assert_called_once_with(current_time=12.3)
     assert player._announcing_content_id is None
+
+
+def test_play_entries_plays_a_direct_url_without_yt_dlp(monkeypatch):
+    device = _FakeDevice()
+    monkeypatch.setattr(castyt, "_get_device", lambda: device)
+    monkeypatch.setattr(castyt, "StreamInfo", Mock(side_effect=AssertionError("used yt-dlp")))
+    entries = [
+        {
+            "id": "s1",
+            "title": "One More Time — Daft Punk",
+            "url": "http://navidrome/rest/stream.view?id=s1",
+            "content_type": "audio/mpeg",
+            "thumb": "http://navidrome/rest/getCoverArt.view?id=a1",
+        }
+    ]
+    player = castyt.Player()
+    try:
+        title, url = player.play_entries(entries, "navidrome", "Discovery")
+    finally:
+        player._stop_polling()
+
+    assert (title, url) == ("One More Time — Daft Punk", None)
+    assert player.source == "navidrome"
+    assert player.queue == entries
+    assert player.index == 0
+    assert player._current_content_id == entries[0]["url"]
+    device.controller.play_media_url.assert_called_once_with(
+        entries[0]["url"],
+        title=entries[0]["title"],
+        content_type="audio/mpeg",
+        thumb=entries[0]["thumb"],
+        stream_type="BUFFERED",
+        current_time=None,
+    )
+
+
+def test_play_entries_rejects_an_empty_queue():
+    player = castyt.Player()
+
+    with pytest.raises(RuntimeError):
+        player.play_entries([], "navidrome", "Empty album")
+
+
+def test_play_entries_raises_when_nothing_plays(monkeypatch):
+    monkeypatch.setattr(castyt, "_get_device", Mock(side_effect=castyt.DeviceUnavailable("nope")))
+    player = castyt.Player()
+
+    with pytest.raises(castyt.DeviceUnavailable):
+        player.play_entries([{"id": "s1", "title": "S", "url": "u"}], "navidrome")
+
+
+def test_grow_queue_locked_does_not_search_youtube_for_navidrome(monkeypatch):
+    search = Mock()
+    monkeypatch.setattr(castyt, "search_youtube", search)
+
+    player = castyt.Player()
+    player.source = "navidrome"
+    player.query = "Discovery"
+    player.queue = [{"id": "s1", "title": "S", "url": "u", "content_type": "audio/mpeg"}]
+
+    player._grow_queue_locked()
+
+    search.assert_not_called()
+    assert len(player.queue) == 1
+
+
+def test_try_play_locked_clears_the_queue_at_the_end_of_a_navidrome_album():
+    player = castyt.Player()
+    player.source = "navidrome"
+    player.query = "Discovery"
+    player.queue = [{"id": "s1", "title": "S", "url": "u", "content_type": "audio/mpeg"}]
+    player.index = 1
+    player._grow_queue_locked = Mock()
+
+    assert player._try_play_locked() is None
+
+    assert player.queue == []
+    assert player.index == -1
+    assert player.query is None
+    assert player.source is None
+
+
+def test_finished_navidrome_track_at_the_end_clears_the_queue():
+    player = castyt.Player()
+    player.source = "navidrome"
+    player.query = "Discovery"
+    player.queue = [{"id": "s1", "title": "S", "url": "u", "content_type": "audio/mpeg"}]
+    player.index = 0
+    player._current_content_id = "u"
+
+    player.new_media_status(
+        SimpleNamespace(player_state="IDLE", idle_reason="FINISHED", content_id="u")
+    )
+
+    assert player.queue == []
+    assert player.index == -1
+    assert player.query is None
+    assert player.source is None
+
+
+def test_skip_past_the_end_stops_the_device_and_clears_state():
+    device = _FakeDevice()
+    player = castyt.Player()
+    player._device = device
+    player.source = "navidrome"
+    player.query = "Discovery"
+    player.queue = [{"id": "s1", "title": "S", "url": "u", "content_type": "audio/mpeg"}]
+    player.index = 0
+
+    with pytest.raises(RuntimeError, match="No more tracks"):
+        player.skip()
+
+    device.stop.assert_called_once()
+    assert player.queue == []
+    assert player.index == -1
+    assert player.query is None
+
+
+def test_now_playing_hides_navidrome_stream_urls():
+    device = _FakeDevice()
+    device.controller.info = {"player_state": "PLAYING"}
+    player = castyt.Player()
+    player._device = device
+    player.queue = [
+        {
+            "id": "s1",
+            "title": "Song",
+            "url": "http://navidrome/rest/stream.view?id=s1&t=secret",
+            "content_type": "audio/mpeg",
+        }
+    ]
+    player.index = 0
+
+    assert player.now_playing() == ("Song", None, "PLAYING")
+
+
+def test_now_playing_keeps_youtube_urls():
+    player = castyt.Player()
+    player.queue = [{"id": "a", "title": "A", "url": "https://youtube/watch"}]
+    player.index = 0
+
+    assert player.now_playing() == ("A", "https://youtube/watch", None)
+
+
+def test_play_search_marks_the_source_as_youtube(monkeypatch):
+    monkeypatch.setattr(castyt, "_get_device", lambda: _FakeDevice())
+    monkeypatch.setattr(castyt, "StreamInfo", _FakeStreamInfo)
+    monkeypatch.setattr(
+        castyt,
+        "search_youtube",
+        lambda query, count=0, exclude_ids=frozenset(): [{"id": "a", "title": "A", "url": "u"}],
+    )
+    player = castyt.Player()
+    try:
+        player.play_search("daft punk")
+        assert player.source == "youtube"
+    finally:
+        player._stop_polling()
