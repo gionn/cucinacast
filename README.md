@@ -1,8 +1,9 @@
 # CucinaCast
 
-Telegram bot that searches YouTube and casts the top result to a Nest Mini (Chromecast).
-It can also speak a custom announcement on demand, and with an ONVIF camera configured,
-play a sound effect when it detects motion (person/animal/vehicle) automatically.
+Telegram bot that plays music on a Nest Mini (Chromecast). It looks for albums and
+tracks on a Navidrome server first and falls back to searching YouTube. It can also
+speak a custom announcement on demand, and with an ONVIF camera configured, play a
+sound effect when it detects motion (person/animal/vehicle) automatically.
 
 Named after "cucina" (Italian for kitchen) — the Nest Mini it talks to lives in the
 kitchen.
@@ -40,6 +41,9 @@ TELEGRAM_BOT_TOKEN=
 NEST_DEVICE_NAME=Cucinino
 OWNER_USER_ID=
 ALLOWED_USER_IDS=
+NAVIDROME_URL=
+NAVIDROME_USER=
+NAVIDROME_PASSWORD=
 ```
 
 Environment variables:
@@ -60,6 +64,21 @@ Bot / casting:
 - `HTTPX_LOG_LEVEL` — optional, log level for the `httpx` library (used internally by
   `python-telegram-bot` for polling). Defaults to `WARNING` to avoid flooding the logs
   with a line per poll request; set to `INFO` or `DEBUG` for verbose HTTP logging.
+
+Navidrome (optional, the feature is disabled unless all three connection variables
+are set):
+
+- `NAVIDROME_URL` — Navidrome base URL, for example `http://192.168.1.10:4533`. Use
+  the LAN address, not `localhost` or a Docker service name: the Nest Mini also
+  fetches the audio and cover art from it. A loopback address works for the bot but
+  not for the speaker.
+- `NAVIDROME_USER` / `NAVIDROME_PASSWORD` — a Navidrome user allowed to stream.
+- `NAVIDROME_TIMEOUT` — seconds to wait for a search or album before falling back to
+  YouTube (default `3`). Keep it short so a stopped server doesn't delay `/play`.
+- `NAVIDROME_FORMAT` — stream format requested from Navidrome (default `mp3`). Set to
+  `raw` to stream original files; the content type is then derived from each file's
+  suffix. `mp3` is the safest choice for the Nest Mini and needs Navidrome's
+  transcoding (the official Docker image ships ffmpeg).
 
 Motion detection / doorbell alerts (see below — all optional, and the
 feature is entirely disabled unless `ONVIF_USER` and `ONVIF_PASS` are both set):
@@ -122,20 +141,22 @@ dev dependencies plus `pre-commit`, and registers the git hooks.
 ```
 
 `requirements-dev.txt` pulls in `requirements.txt` plus `pytest`. The test suite
-covers search/casting, the bot handlers, motion detection, announcements/TTS and
-storage, with network, device and Telegram I/O mocked. Nothing exercises the real
+covers search/casting, the Navidrome client, the bot handlers, motion detection,
+announcements/TTS and storage, with network, device and Telegram I/O mocked. Nothing exercises the real
 speaker automatically, so verify casting changes by running the bot against the
 Nest Mini.
 
 ## Bot commands
 
 - `/start` — explains what the bot does and lists the commands below.
-- `/play <query>` — search YouTube and play the top result on the Nest Mini. Also
-  triggered by sending any plain text message (no need for the `/play` prefix). Queues
-  the top search results and auto-advances to the next one when the current track
-  finishes; when the queue runs out it fetches more results for the same query and
-  keeps going, indefinitely, until `/stop` is sent. Unplayable results (private/removed
-  videos) are skipped automatically.
+- `/play <query>` — with Navidrome configured, search it first. If albums or tracks
+  match, reply with buttons for up to five albums, up to five tracks, and a
+  `Search YouTube` button. An album plays in track order and then stops; a track plays
+  once. With no Navidrome match, or if the server can't be reached, the search goes
+  straight to YouTube without asking. Also triggered by sending any plain text message
+  (no need for the `/play` prefix). YouTube results auto-advance, fetching more for the
+  same query when the queue runs out and going until `/stop`. Unplayable results
+  (private/removed videos) are skipped automatically.
 - `/announce <text>` — speak a custom message on the Nest Mini, interrupting current
   playback, then resume it from approximately where it left off. Same two-step prompt
   as `/play` if sent with no text.
@@ -147,6 +168,21 @@ Nest Mini.
 
 `/start` and `/whoami` are intentionally left out of the bot's `/`-menu (only the
 casting commands show there) but still work when typed.
+
+## Navidrome
+
+Set `NAVIDROME_URL`, `NAVIDROME_USER` and `NAVIDROME_PASSWORD` to enable the
+Navidrome backend. `/play <query>` searches Navidrome's albums and tracks before
+YouTube. A match shows an inline keyboard with the albums, the matching tracks, and
+`Search YouTube`; nothing is cast until you pick one. An album is queued in track
+order and playback stops after the last track. A track is queued on its own. `/skip`
+still moves through that queue.
+
+Navidrome is queried through its Subsonic API with token authentication, so the
+password itself is not sent. Audio and cover art are handed to the Nest Mini as
+plain HTTP URLs, which is why `NAVIDROME_URL` must be an address the speaker can
+reach. If the search times out or fails, the bot logs it and searches YouTube
+instead; a running bot never waits more than `NAVIDROME_TIMEOUT` seconds for it.
 
 ## Motion detection
 

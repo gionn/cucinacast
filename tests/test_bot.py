@@ -12,6 +12,7 @@ import bot
 def _clear_pending_state():
     bot._awaiting_play_text.clear()
     bot._awaiting_announce_text.clear()
+    bot._choices.clear()
 
 
 def _run(coro):
@@ -221,3 +222,227 @@ def test_route_text_cancel_falls_through_outside_device_flow(monkeypatch):
     _run(bot._route_text(update, context))
 
     do_play_mock.assert_awaited_once_with(update, context, "cancel")
+
+
+def _callback_update(user_id=1, data="choice:abc"):
+    query = SimpleNamespace(
+        data=data,
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    return SimpleNamespace(
+        effective_user=SimpleNamespace(id=user_id, full_name="Test User"),
+        callback_query=query,
+    )
+
+
+def _navidrome_result(albums=(), songs=()):
+    return {"albums": list(albums), "songs": list(songs)}
+
+
+def _album(id="a1", name="Discovery", artist="Daft Punk"):
+    return {"id": id, "name": name, "artist": artist}
+
+
+def _song(id="s1", title="One More Time", artist="Daft Punk", album="Discovery"):
+    return {
+        "id": id,
+        "title": title,
+        "artist": artist,
+        "album": album,
+        "album_id": "a1",
+    }
+
+
+def test_do_play_skips_navidrome_when_not_configured(monkeypatch):
+    monkeypatch.setattr(bot.navidrome, "enabled", lambda: False)
+    search = Mock()
+    monkeypatch.setattr(bot.navidrome, "search", search)
+    play_mock = Mock(return_value=("Track", "https://youtube/watch"))
+    monkeypatch.setattr(bot.player, "play_search", play_mock)
+    update = _update()
+    context = _context()
+
+    _run(bot._do_play(update, context, "daft punk"))
+
+    search.assert_not_called()
+    play_mock.assert_called_once_with("daft punk")
+    assert update.message.reply_text.await_args_list[-1].args[0] == (
+        "Now playing: Track\nhttps://youtube/watch"
+    )
+
+
+def test_do_play_offers_albums_and_songs_from_navidrome(monkeypatch):
+    monkeypatch.setattr(bot.navidrome, "enabled", lambda: True)
+    monkeypatch.setattr(
+        bot.navidrome,
+        "search",
+        lambda query, **kwargs: _navidrome_result(albums=[_album()], songs=[_song()]),
+    )
+    play_mock = Mock()
+    monkeypatch.setattr(bot.player, "play_search", play_mock)
+    update = _update()
+    context = _context()
+
+    _run(bot._do_play(update, context, "daft punk"))
+
+    play_mock.assert_not_called()
+    reply = update.message.reply_text.await_args_list[-1]
+    assert "Found on Navidrome" in reply.args[0]
+    rows = reply.kwargs["reply_markup"].inline_keyboard
+    assert [row[0].text for row in rows] == [
+        "Discovery — Daft Punk",
+        "♪ One More Time — Daft Punk",
+        "Search YouTube",
+    ]
+    assert all(row[0].callback_data.startswith("choice:") for row in rows)
+    assert [choice["kind"] for choice in bot._choices.values()] == [
+        "album",
+        "song",
+        "youtube",
+    ]
+
+
+def test_do_play_falls_back_silently_when_navidrome_has_no_match(monkeypatch):
+    monkeypatch.setattr(bot.navidrome, "enabled", lambda: True)
+    monkeypatch.setattr(
+        bot.navidrome,
+        "search",
+        lambda query, **kwargs: _navidrome_result(),
+    )
+    play_mock = Mock(return_value=("Track", "https://youtube/watch"))
+    monkeypatch.setattr(bot.player, "play_search", play_mock)
+    update = _update()
+    context = _context()
+
+    _run(bot._do_play(update, context, "daft punk"))
+
+    play_mock.assert_called_once_with("daft punk")
+    assert "Now playing: Track" in update.message.reply_text.await_args_list[-1].args[0]
+
+
+def test_do_play_falls_back_when_navidrome_is_unavailable(monkeypatch):
+    monkeypatch.setattr(bot.navidrome, "enabled", lambda: True)
+
+    def raise_unavailable(query, **kwargs):
+        raise bot.navidrome.NavidromeUnavailable("down")
+
+    monkeypatch.setattr(bot.navidrome, "search", raise_unavailable)
+    play_mock = Mock(return_value=("Track", "https://youtube/watch"))
+    monkeypatch.setattr(bot.player, "play_search", play_mock)
+    update = _update()
+    context = _context()
+
+    _run(bot._do_play(update, context, "daft punk"))
+
+    play_mock.assert_called_once_with("daft punk")
+
+
+def test_remember_choice_drops_the_oldest_entries(monkeypatch):
+    monkeypatch.setattr(bot, "MAX_PENDING_CHOICES", 2)
+
+    first = bot._remember_choice({"kind": "youtube"})
+    second = bot._remember_choice({"kind": "youtube"})
+    third = bot._remember_choice({"kind": "youtube"})
+
+    assert first not in bot._choices
+    assert second in bot._choices
+    assert third in bot._choices
+
+
+def test_on_choice_plays_the_selected_album(monkeypatch):
+    token = bot._remember_choice({"kind": "album", "album": _album(), "query": "daft punk"})
+    update = _callback_update(data=f"choice:{token}")
+    context = _context()
+    entries = [{"id": "s1", "title": "One More Time", "url": "http://nav/1"}]
+    album = {**_album(), "entries": entries}
+    monkeypatch.setattr(bot.navidrome, "album_entries", lambda album_id: album)
+    play_mock = Mock(return_value=("One More Time", "http://nav/1"))
+    monkeypatch.setattr(bot.player, "play_entries", play_mock)
+
+    _run(bot._on_choice(update, context))
+
+    play_mock.assert_called_once_with(entries, "navidrome", "Discovery")
+    last_edit = update.callback_query.edit_message_text.await_args_list[-1]
+    assert "Now playing album" in last_edit.args[0]
+
+
+def test_on_choice_plays_the_selected_song(monkeypatch):
+    token = bot._remember_choice({"kind": "song", "song": _song(), "query": "daft punk"})
+    update = _callback_update(data=f"choice:{token}")
+    context = _context()
+    entry = {"id": "s1", "title": "One More Time", "url": "http://nav/1"}
+    monkeypatch.setattr(bot.navidrome, "song_entry", lambda song_id: entry)
+    play_mock = Mock(return_value=("One More Time", "http://nav/1"))
+    monkeypatch.setattr(bot.player, "play_entries", play_mock)
+
+    _run(bot._on_choice(update, context))
+
+    play_mock.assert_called_once_with([entry], "navidrome", "One More Time")
+    last_edit = update.callback_query.edit_message_text.await_args_list[-1]
+    assert "Now playing: One More Time" in last_edit.args[0]
+
+
+def test_on_choice_searches_youtube(monkeypatch):
+    token = bot._remember_choice({"kind": "youtube", "query": "daft punk"})
+    update = _callback_update(data=f"choice:{token}")
+    context = _context()
+    play_mock = Mock(return_value=("Track", "https://youtube/watch"))
+    monkeypatch.setattr(bot.player, "play_search", play_mock)
+
+    _run(bot._on_choice(update, context))
+
+    play_mock.assert_called_once_with("daft punk")
+    last_edit = update.callback_query.edit_message_text.await_args_list[-1]
+    assert "Now playing: Track" in last_edit.args[0]
+
+
+def test_on_choice_reports_an_expired_selection(monkeypatch):
+    update = _callback_update(data="choice:missing")
+    context = _context()
+    play_mock = Mock()
+    monkeypatch.setattr(bot.player, "play_search", play_mock)
+
+    _run(bot._on_choice(update, context))
+
+    update.callback_query.edit_message_text.assert_awaited_once_with(
+        "That selection expired. Send /play again."
+    )
+    play_mock.assert_not_called()
+
+
+def test_on_choice_denies_a_disallowed_user(monkeypatch):
+    token = bot._remember_choice({"kind": "youtube", "query": "daft punk"})
+    update = _callback_update(user_id=7, data=f"choice:{token}")
+    context = _context()
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: False)
+    play_mock = Mock()
+    monkeypatch.setattr(bot.player, "play_search", play_mock)
+
+    _run(bot._on_choice(update, context))
+
+    update.callback_query.answer.assert_awaited_once()
+    context.bot.send_message.assert_awaited_once()
+    play_mock.assert_not_called()
+
+
+def test_nowplaying_omits_a_hidden_url(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    monkeypatch.setattr(bot.player, "now_playing", lambda: ("Track", None, "PLAYING"))
+    update = _update()
+    context = _context()
+
+    _run(bot.nowplaying(update, context))
+
+    update.message.reply_text.assert_awaited_once_with("Now playing (PLAYING): Track")
+
+
+def test_skip_omits_a_hidden_url(monkeypatch):
+    monkeypatch.setattr(bot, "_is_allowed", lambda update: True)
+    monkeypatch.setattr(bot.player, "skip", lambda: ("Track", None))
+    update = _update()
+    context = _context()
+
+    _run(bot.skip(update, context))
+
+    update.message.reply_text.assert_awaited_once_with("Now playing: Track")

@@ -1,6 +1,6 @@
 # CucinaCast
 
-Telegram bot that searches YouTube and casts the result to a Nest Mini
+Telegram bot that plays music from Navidrome or YouTube on a Nest Mini
 (Chromecast) on the LAN. It also speaks gTTS announcements on demand and, when
 an ONVIF camera is configured, plays a sound effect on classified motion.
 
@@ -37,8 +37,9 @@ requiring a configured default device.
 
 ## Tests
 
-`tests/` has mocked unit tests covering `castyt`, `storage`, `bot`, `motion`,
-`announce`, `tts`, `phrases` and `sounds`; no hardware or network is involved.
+`tests/` has mocked unit tests covering `castyt`, `storage`, `bot`, `navidrome`,
+`motion`, `announce`, `tts`, `phrases` and `sounds`; no hardware or network is
+involved.
 `tests/conftest.py` repoints `storage.DB_PATH` at a per-test temp directory and
 sets fake Telegram env vars, so tests never touch the real `cucinacast.db`. Its
 session fixtures also make any non-loopback socket call raise and replace
@@ -71,7 +72,12 @@ service first when you also trigger `/announce`, since both write
     which `announce.py` gives a fresh token per call so a replaced announcement
     cannot be mistaken for the current one. Media the user started on the speaker
     is never taken over, and `_grow_queue_locked` re-searches the current query
-    (refusing to run without one) when the queue empties.
+    (refusing to run without one) when the queue empties. It does nothing when
+    `source == "navidrome"`: an album queue is finite and is cleared when its last
+    track ends.
+  - Entries carrying `content_type` are played as-is (a Navidrome stream URL)
+    rather than through `StreamInfo`, since yt-dlp cannot resolve them.
+    `play_entries` starts such a queue; `play_search` marks `source="youtube"`.
   - Announce-resume state lives on `Player` (`_announcing_content_id`,
     `_interrupted_at_seconds`) and is cleared by `stop()` and by a fresh play. The
     position is approximate: wall-clock elapsed time, captured before speaking,
@@ -98,9 +104,22 @@ service first when you also trigger `/announce`, since both write
     its socket client: catt stops the discovery browser's shared one, and without
     the replacement pychromecast's reconnect thread spins on
     `AssertionError: Zeroconf instance loop must be running`.
+- `navidrome.py` — optional Subsonic-API backend, no Telegram/casting dependency.
+  - Disabled unless `NAVIDROME_URL`, `NAVIDROME_USER` and `NAVIDROME_PASSWORD` are
+    all set. Uses token auth (a fresh salt per URL) and a short timeout, so a
+    stopped server costs at most `NAVIDROME_TIMEOUT` before the YouTube fallback.
+  - `search` queries `/rest/search3` for albums and songs, then adds the parent
+    albums of song matches, deduped by album id. `album_entries` and `song_entry`
+    return queue entries with the stream URL, content type and cover art, which the
+    Nest Mini fetches directly. All failures become `NavidromeUnavailable`.
 - `bot.py` — Telegram wiring only. Handler bodies call into `player`,
   `synthesize_and_serve` and `serve_sound` through `asyncio.to_thread`, because
   catt/zeroconf discovery blocks and would stall the event loop.
+  - `_do_play` asks Navidrome first when it is enabled. A match sends an inline
+    keyboard (albums, then songs, then `Search YouTube`) and casts nothing until a
+    button is pressed; no match or a `NavidromeUnavailable` goes straight to
+    YouTube. Callback tokens are short random keys into `_choices`, since album
+    ids and queries do not fit Telegram's 64-byte callback data.
   - Bare `/play` and `/announce` fall back to a two-step prompt: the user id goes
     into `_awaiting_play_text`/`_awaiting_announce_text`, and `_route_text` (the
     catch-all text handler) consumes the next message before defaulting to `/play`.
