@@ -229,7 +229,11 @@ class Player:
             if info.get("player_state") not in (None, "IDLE"):
                 return
             idle_content_id = info.get("content_id")
-            if idle_content_id is not None and idle_content_id == self._current_content_id:
+            if (
+                info.get("idle_reason") == "FINISHED"
+                and idle_content_id is not None
+                and idle_content_id == self._current_content_id
+            ):
                 # Our track ended by itself; the status listener advances the queue.
                 return
             self._cleanup_external_stop()

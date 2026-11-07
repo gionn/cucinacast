@@ -497,6 +497,12 @@ def test_failed_media_of_other_content_does_not_resume():
     assert player._announcing_content_id == "http://host/announce.mp3?t=first"
 
 
+def test_live_zeroconf_is_stubbed_offline():
+    # conftest swaps in a stand-in; a real Zeroconf opens multicast sockets
+    # even when nothing is ever browsed.
+    assert getattr(castyt.zeroconf.Zeroconf, "offline", False)
+
+
 def test_ensure_device_injects_live_zeroconf(monkeypatch):
     fake_device = _FakeDevice()
     sentinel_zconf = object()
@@ -894,7 +900,11 @@ def test_poll_heartbeat_ignores_the_track_that_just_finished():
     # The device reports IDLE for the track it has finished, which arrives
     # before the status listener has advanced the queue.
     device = _FakeDevice()
-    device.controller.info = {"player_state": "IDLE", "content_id": "u"}
+    device.controller.info = {
+        "player_state": "IDLE",
+        "idle_reason": "FINISHED",
+        "content_id": "u",
+    }
     player = castyt.Player()
     player._device = device
     player.query = "q"
@@ -906,6 +916,30 @@ def test_poll_heartbeat_ignores_the_track_that_just_finished():
 
     assert player.query == "q"
     assert len(player.queue) == 1
+
+
+@pytest.mark.parametrize("idle_reason", ["CANCELLED", "INTERRUPTED", "ERROR"])
+def test_poll_heartbeat_clears_the_queue_when_the_track_was_stopped(idle_reason):
+    # The receiver keeps the content id when it stops our track for any reason
+    # other than reaching its end, so a matching id alone means nothing.
+    device = _FakeDevice()
+    device.controller.info = {
+        "player_state": "IDLE",
+        "idle_reason": idle_reason,
+        "content_id": "u",
+    }
+    player = castyt.Player()
+    player._device = device
+    player.query = "q"
+    player.queue = [{"id": "a", "title": "A", "url": "u"}]
+    player.index = 0
+    player._current_content_id = "u"
+
+    player._poll_heartbeat()
+
+    assert player.query is None
+    assert player.queue == []
+    assert player.index == -1
 
 
 def test_poll_heartbeat_skips_while_announcing():

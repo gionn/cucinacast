@@ -41,9 +41,9 @@ requiring a configured default device.
 `announce`, `tts`, `phrases` and `sounds`; no hardware or network is involved.
 `tests/conftest.py` repoints `storage.DB_PATH` at a per-test temp directory and
 sets fake Telegram env vars, so tests never touch the real `cucinacast.db`. Its
-session fixture also makes any non-loopback socket call raise, so a test that
-forgets to stub one fails everywhere instead of passing on a machine that is
-online.
+session fixtures also make any non-loopback socket call raise and replace
+`zeroconf.Zeroconf` with an inert stand-in, so a test that forgets to stub a call
+fails everywhere instead of passing on a machine that is online.
 
 Nothing drives the real speaker, camera or Telegram API automatically. Check
 casting and motion changes by running `bot.py` against the Nest Mini. Stop the
@@ -82,10 +82,12 @@ service first when you also trigger `/announce`, since both write
     `HEARTBEAT_INTERVAL_SECONDS` to catch a reboot or network dropout, which
     produce no status event; when the device has stopped on its own it clears
     the queue through `_cleanup_external_stop`. It skips while an announcement
-    is in flight and when the idle status names the track it is playing, because
-    that one is a normal ending the status listener is already advancing. The
-    worker owns its own `Event`, so `_stop_polling` interrupts the wait between
-    checks instead of dropping the handle on a thread that is still sleeping.
+    is in flight and when the idle status names the track it is playing with
+    reason `FINISHED`, because that one is a normal ending the status listener
+    is already advancing; a matching content id with any other reason is a stop
+    the receiver or the user performed. The worker owns its own `Event`, so
+    `_stop_polling` interrupts the wait between checks instead of dropping the
+    handle on a thread that is still sleeping.
   - `StreamInfo` must be built with `cast_info=device._cast.cast_info` and played
     with `content_type=stream.guessed_content_type`; otherwise yt-dlp/catt choose
     a video/mp4 format the audio-only device cannot play. Live YouTube streams
