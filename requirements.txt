@@ -1,5 +1,5 @@
 catt==0.13.3
-zeroconf==0.151.5
+zeroconf==0.154.0
 yt-dlp==2026.10.26
 python-telegram-bot==22.8
 python-dotenv==1.2.4
